@@ -43,7 +43,7 @@ def create_slack_app(
     )
 
     # Register event handlers (mentions, messages)
-    register_event_handlers(app, session_manager, claude_agent)
+    register_event_handlers(app, session_manager, claude_agent, config)
 
     # Register action handlers (button clicks)
     register_action_handlers(app, session_manager, approval_manager)

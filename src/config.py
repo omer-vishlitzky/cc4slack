@@ -82,6 +82,12 @@ class Settings(BaseSettings):
         description="Working directory for Claude operations"
     )
 
+    # Session Connection
+    claude_session_file: str = Field(
+        default="/tmp/current_claude_session.txt",
+        description="Path to file containing the current Claude terminal session ID (written by SessionStart hook)"
+    )
+
     # Logging
     log_level: str = Field(
         default="INFO",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -15,12 +16,16 @@ if TYPE_CHECKING:
     from slack_sdk.web.async_client import AsyncWebClient
 
     from ..claude.agent import ClaudeSlackAgent
+    from ..config import Settings
     from ..sessions.manager import SessionManager
 
 logger = logging.getLogger(__name__)
 
 # Regex to clean bot mention from message text
 MENTION_PATTERN = re.compile(r"<@[A-Z0-9]+>\s*")
+
+# Regex to match connect command with optional session ID
+CONNECT_PATTERN = re.compile(r"^connect\s*(.*)$", re.IGNORECASE)
 
 
 def clean_mention(text: str) -> str:
@@ -32,6 +37,7 @@ def register_event_handlers(
     app: AsyncApp,
     session_manager: SessionManager,
     claude_agent: ClaudeSlackAgent,
+    config: Settings | None = None,
 ) -> None:
     """Register Slack event handlers on the app."""
 
@@ -57,6 +63,19 @@ def register_event_handlers(
                 channel=channel,
                 thread_ts=thread_ts,
                 text="Hi! How can I help you? Just mention me with your question.",
+            )
+            return
+
+        # Check for connect command
+        connect_match = CONNECT_PATTERN.match(user_message)
+        if connect_match:
+            await handle_connect(
+                channel=channel,
+                thread_ts=thread_ts,
+                session_id_arg=connect_match.group(1).strip(),
+                client=client,
+                session_manager=session_manager,
+                config=config,
             )
             return
 
@@ -94,6 +113,19 @@ def register_event_handlers(
         if not text.strip():
             return
 
+        # Check for connect command
+        connect_match = CONNECT_PATTERN.match(text.strip())
+        if connect_match:
+            await handle_connect(
+                channel=channel,
+                thread_ts=thread_ts,
+                session_id_arg=connect_match.group(1).strip(),
+                client=client,
+                session_manager=session_manager,
+                config=config,
+            )
+            return
+
         await process_request(
             channel=channel,
             thread_ts=thread_ts,
@@ -102,6 +134,120 @@ def register_event_handlers(
             session_manager=session_manager,
             claude_agent=claude_agent,
         )
+
+
+def read_session_id_from_file(file_path: str) -> str | None:
+    """Read a Claude session ID from a file on disk."""
+    try:
+        if os.path.exists(file_path):
+            content = open(file_path).read().strip()
+            if content:
+                return content
+    except Exception as e:
+        logger.warning(f"Failed to read session file {file_path}: {e}")
+    return None
+
+
+def list_available_sessions(claude_dir: str = os.path.expanduser("~/.claude/projects")) -> list[tuple[str, str]]:
+    """List available session IDs from Claude's project directories.
+
+    Returns list of (session_id, file_path) tuples, sorted by most recent first.
+    """
+    sessions = []
+    try:
+        if not os.path.isdir(claude_dir):
+            return sessions
+        for root, _dirs, files in os.walk(claude_dir):
+            for f in files:
+                if f.endswith(".jsonl"):
+                    full_path = os.path.join(root, f)
+                    session_id = f.removesuffix(".jsonl")
+                    mtime = os.path.getmtime(full_path)
+                    sessions.append((session_id, full_path, mtime))
+        sessions.sort(key=lambda x: x[2], reverse=True)
+        return [(s[0], s[1]) for s in sessions]
+    except Exception as e:
+        logger.warning(f"Failed to list sessions from {claude_dir}: {e}")
+        return []
+
+
+async def handle_connect(
+    channel: str,
+    thread_ts: str,
+    session_id_arg: str,
+    client: AsyncWebClient,
+    session_manager: SessionManager,
+    config: Settings | None = None,
+) -> None:
+    """Handle the 'connect' command to attach to an existing Claude session."""
+    from ..config import get_settings
+
+    if config is None:
+        config = get_settings()
+
+    claude_session_id: str | None = None
+
+    if session_id_arg:
+        # User provided a specific session ID
+        claude_session_id = session_id_arg
+    else:
+        # Try to read from the session file
+        claude_session_id = read_session_id_from_file(config.claude_session_file)
+
+    if not claude_session_id:
+        # No session ID found - show available sessions
+        available = list_available_sessions()
+        if available:
+            session_list = "\n".join(
+                f"• `{sid}`" for sid, _ in available[:5]
+            )
+            await client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=(
+                    f":warning: No session ID found in `{config.claude_session_file}`.\n\n"
+                    f"*Recent sessions found on disk:*\n{session_list}\n\n"
+                    f"Use `connect <session-id>` to connect to one of these sessions.\n\n"
+                    f"_Tip: Set up a SessionStart hook to auto-write the session ID. "
+                    f"See the README for details._"
+                ),
+            )
+        else:
+            await client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=(
+                    f":warning: No session ID found.\n\n"
+                    f"• No file at `{config.claude_session_file}`\n"
+                    f"• No sessions found in `~/.claude/projects/`\n\n"
+                    f"*To connect:*\n"
+                    f"1. Run `/status` in your Claude terminal to get the session ID\n"
+                    f"2. Then use `connect <session-id>` here\n\n"
+                    f"_Or set up a SessionStart hook to auto-write the ID._"
+                ),
+            )
+        return
+
+    # Get or create the Slack session for this thread
+    session = await session_manager.get_or_create(
+        channel_id=channel,
+        thread_ts=thread_ts,
+    )
+
+    # Set the Claude session ID to connect to the existing session
+    session.claude_session_id = claude_session_id
+    await session_manager.save(session)
+
+    await client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=(
+            f":link: *Connected to existing Claude session*\n"
+            f"Session ID: `{claude_session_id[:12]}...`\n\n"
+            f"Messages in this thread will now continue that session."
+        ),
+    )
+    logger.info(f"Connected Slack thread {channel}:{thread_ts} to Claude session {claude_session_id}")
 
 
 async def process_request(

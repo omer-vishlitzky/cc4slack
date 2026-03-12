@@ -113,8 +113,10 @@ class ClaudeSlackAgent:
 
         # Set permission mode or custom callback
         if self.config.dangerously_skip_permissions:
+            logger.info("Using bypassPermissions mode (DANGEROUSLY_SKIP_PERMISSIONS=true)")
             options.permission_mode = "bypassPermissions"
         else:
+            logger.info("Using can_use_tool callback for permission checks")
             options.can_use_tool = can_use_tool
 
         # Only set model if explicitly configured
@@ -149,11 +151,16 @@ class ClaudeSlackAgent:
                 if isinstance(block, TextBlock):
                     await updater.append(block.text)
                 elif isinstance(block, ToolUseBlock):
-                    # Show tool usage (approval happens in permission callback)
+                    # Show tool usage in the message
                     tool_name = block.name
-                    logger.debug(f"Tool use: {tool_name}")
+                    tool_input = block.input if hasattr(block, 'input') else {}
+                    logger.info(f"Tool use: {tool_name}")
+
+                    # Format tool usage for display
+                    tool_display = self._format_tool_use(tool_name, tool_input)
+                    await updater.append(f"\n\n{tool_display}\n")
                 elif isinstance(block, ToolResultBlock):
-                    # Tool results are handled internally
+                    # Optionally show tool results (can be verbose)
                     pass
 
         elif isinstance(message, ResultMessage):
@@ -173,6 +180,41 @@ class ClaudeSlackAgent:
         elif isinstance(message, SystemMessage):
             # Log system messages
             logger.debug(f"System message: {message}")
+
+    def _format_tool_use(self, tool_name: str, tool_input: dict[str, Any]) -> str:
+        """Format tool usage for display in Slack."""
+        if tool_name == "Read":
+            file_path = tool_input.get("file_path", "unknown")
+            return f":mag: *Reading* `{file_path}`"
+        elif tool_name == "Write":
+            file_path = tool_input.get("file_path", "unknown")
+            return f":pencil2: *Writing* `{file_path}`"
+        elif tool_name == "Edit":
+            file_path = tool_input.get("file_path", "unknown")
+            return f":pencil: *Editing* `{file_path}`"
+        elif tool_name == "Bash":
+            command = tool_input.get("command", "")
+            desc = tool_input.get("description", "")
+            if desc:
+                return f":terminal: *Running:* {desc}\n```{command[:200]}```"
+            return f":terminal: *Running:*\n```{command[:200]}```"
+        elif tool_name == "Glob":
+            pattern = tool_input.get("pattern", "")
+            return f":file_folder: *Searching for* `{pattern}`"
+        elif tool_name == "Grep":
+            pattern = tool_input.get("pattern", "")
+            return f":mag_right: *Searching for* `{pattern}`"
+        elif tool_name == "WebSearch":
+            query = tool_input.get("query", "")
+            return f":globe_with_meridians: *Searching web:* {query}"
+        elif tool_name == "WebFetch":
+            url = tool_input.get("url", "")
+            return f":link: *Fetching* `{url[:50]}...`" if len(url) > 50 else f":link: *Fetching* `{url}`"
+        elif tool_name == "Task":
+            desc = tool_input.get("description", "subtask")
+            return f":robot_face: *Spawning agent:* {desc}"
+        else:
+            return f":wrench: *Using tool:* `{tool_name}`"
 
     def _create_permission_callback(
         self,
@@ -194,8 +236,11 @@ class ClaudeSlackAgent:
                 PermissionResultAllow to allow the tool
                 PermissionResultDeny to deny the tool with a message
             """
+            logger.info(f"Permission check for tool: {tool_name}")
+
             # Auto-approve read-only tools
             if self.config.auto_approve_read_only and tool_name in READ_ONLY_TOOLS:
+                logger.info(f"Auto-approving read-only tool: {tool_name}")
                 return PermissionResultAllow()
 
             # Check if tool requires approval
@@ -206,9 +251,11 @@ class ClaudeSlackAgent:
                 needs_approval = True
 
             if not needs_approval:
+                logger.info(f"Auto-approving tool (no approval required): {tool_name}")
                 return PermissionResultAllow()
 
             # Request approval via Slack
+            logger.info(f"Requesting Slack approval for tool: {tool_name}")
             return await self._request_approval(
                 session, tool_name, tool_input, slack_client
             )
