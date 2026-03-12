@@ -54,13 +54,15 @@ class SlackMessageUpdater:
         self._last_update = 0.0
         self._lock = asyncio.Lock()
         self._pending_update = False
+        self._finalized = False
         self._continuation_messages: list[str] = []  # Track continuation message timestamps
 
     async def append(self, text: str) -> None:
         """Append text to the buffer and update if needed."""
         async with self._lock:
             self._buffer += text
-            await self._maybe_flush()
+            if not self._finalized:
+                await self._maybe_flush()
 
     async def set_text(self, text: str) -> None:
         """Set the entire buffer text and update."""
@@ -85,7 +87,8 @@ class SlackMessageUpdater:
         await asyncio.sleep(delay)
         async with self._lock:
             self._pending_update = False
-            await self._flush()
+            if not self._finalized:
+                await self._flush()
 
     async def _flush(self) -> None:
         """Send buffered content to Slack."""
@@ -125,6 +128,8 @@ class SlackMessageUpdater:
         For long responses, splits into multiple messages to avoid truncation.
         """
         async with self._lock:
+            self._finalized = True
+
             try:
                 if not self._buffer:
                     self._buffer = "_No response_"
