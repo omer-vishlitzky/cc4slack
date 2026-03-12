@@ -185,9 +185,11 @@ class ClaudeSlackAgent:
                 await self.session_manager.save(session)
 
                 if is_new_session:
+                    cwd = self.config.working_directory
                     await updater.append(
                         f"\n\n---\n:id: *Session ID:* `{message.session_id}`\n"
-                        f"_To continue from terminal:_ `claude --resume {message.session_id}`"
+                        f"_To continue from terminal:_\n"
+                        f"```cd {cwd} && claude --resume {message.session_id}```"
                     )
 
             # Handle result based on subtype
