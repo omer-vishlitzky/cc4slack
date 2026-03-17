@@ -119,9 +119,10 @@ class ClaudeSlackAgent:
         # Create the permission callback
         can_use_tool = self._create_permission_callback(session, updater, slack_client)
 
-        # Build options
+        # Build options — use per-session cwd if set, otherwise config default
+        effective_cwd = session.cwd or self.config.working_directory
         options = ClaudeCodeOptions(
-            cwd=self.config.working_directory,
+            cwd=effective_cwd,
             max_turns=self.config.claude_max_turns,
         )
 
@@ -184,7 +185,7 @@ class ClaudeSlackAgent:
                 session.claude_session_id = message.session_id
 
                 if is_new_session:
-                    cwd = self.config.working_directory
+                    cwd = session.cwd or self.config.working_directory
                     await updater.append(
                         f"\n\n---\n:id: *Session ID:* `{message.session_id}`\n"
                         f"_To continue from terminal:_\n"

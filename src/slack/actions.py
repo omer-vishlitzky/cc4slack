@@ -214,7 +214,8 @@ def register_action_handlers(
 
             if session:
                 from ..config import get_settings
-                cwd = config.working_directory if config else get_settings().working_directory
+                default_cwd = config.working_directory if config else get_settings().working_directory
+                cwd = session.cwd or default_cwd
                 await client.chat_postMessage(
                     channel=body["channel"]["id"],
                     thread_ts=body["message"].get("thread_ts") or body["message"]["ts"],

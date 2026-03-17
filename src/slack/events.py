@@ -30,6 +30,9 @@ CONNECT_PATTERN = re.compile(r"^connect\s*(.*)$", re.IGNORECASE)
 # Regex to match sessions command
 SESSIONS_PATTERN = re.compile(r"^sessions?\s*$", re.IGNORECASE)
 
+# Regex to match cwd command with optional path
+CWD_PATTERN = re.compile(r"^cwd\s*(.*)$", re.IGNORECASE)
+
 
 def clean_mention(text: str) -> str:
     """Remove bot mention from message text."""
@@ -92,6 +95,19 @@ def register_event_handlers(
             )
             return
 
+        # Check for cwd command
+        cwd_match = CWD_PATTERN.match(user_message)
+        if cwd_match:
+            await handle_cwd(
+                channel=channel,
+                thread_ts=thread_ts,
+                path_arg=cwd_match.group(1).strip(),
+                client=client,
+                session_manager=session_manager,
+                config=config,
+            )
+            return
+
         await process_request(
             channel=channel,
             thread_ts=thread_ts,
@@ -146,6 +162,19 @@ def register_event_handlers(
                 channel=channel,
                 thread_ts=thread_ts,
                 client=client,
+                config=config,
+            )
+            return
+
+        # Check for cwd command
+        cwd_match = CWD_PATTERN.match(stripped)
+        if cwd_match:
+            await handle_cwd(
+                channel=channel,
+                thread_ts=thread_ts,
+                path_arg=cwd_match.group(1).strip(),
+                client=client,
+                session_manager=session_manager,
                 config=config,
             )
             return
@@ -450,6 +479,68 @@ def _get_session_summary(session_id: str, working_directory: str) -> str:
     except Exception as e:
         logger.debug(f"Failed to read session summary: {e}")
         return ""
+
+
+async def handle_cwd(
+    channel: str,
+    thread_ts: str,
+    path_arg: str,
+    client: AsyncWebClient,
+    session_manager: SessionManager,
+    config: Settings | None = None,
+) -> None:
+    """Handle the 'cwd' command to show or change the working directory for this thread."""
+    from ..config import get_settings
+
+    if config is None:
+        config = get_settings()
+
+    session = await session_manager.get_or_create(
+        channel_id=channel,
+        thread_ts=thread_ts,
+    )
+
+    if not path_arg:
+        # Show current working directory
+        effective_cwd = session.cwd or config.working_directory
+        source = "thread override" if session.cwd else "default"
+        await client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=f":file_folder: *Working directory* ({source}): `{effective_cwd}`",
+        )
+        return
+
+    # Validate the path exists
+    new_path = os.path.expanduser(path_arg)
+    new_path = os.path.abspath(new_path)
+
+    if not os.path.isdir(new_path):
+        await client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=f":warning: Directory not found: `{new_path}`",
+        )
+        return
+
+    # Set the cwd on the session
+    old_cwd = session.cwd or config.working_directory
+    session.cwd = new_path
+    # Clear the Claude session ID since it's tied to the old project directory
+    session.claude_session_id = None
+    await session_manager.save(session)
+
+    await client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=(
+            f":file_folder: *Working directory changed*\n"
+            f"From: `{old_cwd}`\n"
+            f"To: `{new_path}`\n\n"
+            f"_Session reset — next message starts a fresh Claude session in the new directory._"
+        ),
+    )
+    logger.info(f"Changed cwd for {channel}:{thread_ts} to {new_path}")
 
 
 async def process_request(
