@@ -8,6 +8,7 @@ import os
 import re
 from typing import TYPE_CHECKING, Any
 
+
 from . import blocks
 from .message_updater import SlackMessageUpdater
 
@@ -32,6 +33,23 @@ SESSIONS_PATTERN = re.compile(r"^sessions?\s*$", re.IGNORECASE)
 
 # Regex to match cwd command with optional path
 CWD_PATTERN = re.compile(r"^cwd\s*(.*)$", re.IGNORECASE)
+
+# Regex to match help command
+HELP_PATTERN = re.compile(r"^help\s*$", re.IGNORECASE)
+
+HELP_TEXT = """:robot_face: *Available commands:*
+
+• *`connect`* — Connect to the most recent Claude session
+• *`connect <number>`* — Connect by index from the sessions list
+• *`connect <session-id>`* — Connect by full session ID
+• *`sessions`* — List available Claude sessions
+• *`cwd`* — Show current working directory
+• *`cwd <path>`* — Change working directory for this thread
+• *`help`* — Show this help message
+
+_You can also upload files — they'll be saved to the working directory and passed to Claude._
+_Use the *Clear Session* button to end a session (shows cost summary)._
+_Use the *Status* button to see session details._"""
 
 
 def clean_mention(text: str) -> str:
@@ -108,6 +126,28 @@ def register_event_handlers(
             )
             return
 
+        # Check for help command
+        if HELP_PATTERN.match(user_message):
+            await client.chat_postMessage(
+                channel=channel, thread_ts=thread_ts, text=HELP_TEXT,
+            )
+            return
+
+        # Handle file uploads — download and mention in the prompt
+        files = event.get("files", [])
+        if files:
+            session = await session_manager.get_or_create(
+                channel_id=channel, thread_ts=thread_ts,
+            )
+            effective_cwd = session.cwd or config.working_directory if config else "."
+            saved = await download_slack_files(files, effective_cwd, config.slack_bot_token if config else "")
+            if saved:
+                file_list = ", ".join(f"`{f}`" for f in saved)
+                user_message = (
+                    f"{user_message}\n\n"
+                    f"[The user uploaded the following files to the working directory: {file_list}]"
+                ) if user_message else f"The user uploaded files: {file_list}. Please review them."
+
         await process_request(
             channel=channel,
             thread_ts=thread_ts,
@@ -115,6 +155,7 @@ def register_event_handlers(
             client=client,
             session_manager=session_manager,
             claude_agent=claude_agent,
+            user_message_ts=event["ts"],
         )
 
     @app.event("message")
@@ -139,53 +180,80 @@ def register_event_handlers(
 
         logger.info(f"DM from {user}: {text[:50]}...")
 
-        if not text.strip():
-            return
-
-        # Check for connect command
+        files = event.get("files", [])
         stripped = text.strip()
-        connect_match = CONNECT_PATTERN.match(stripped)
-        if connect_match:
-            await handle_connect(
-                channel=channel,
-                thread_ts=thread_ts,
-                session_id_arg=connect_match.group(1).strip(),
-                client=client,
-                session_manager=session_manager,
-                config=config,
-            )
+
+        if not stripped and not files:
             return
 
-        # Check for sessions command
-        if SESSIONS_PATTERN.match(stripped):
-            await handle_list_sessions(
-                channel=channel,
-                thread_ts=thread_ts,
-                client=client,
-                config=config,
-            )
-            return
+        # Check for commands (only when there are no files)
+        if stripped and not files:
+            # Check for connect command
+            connect_match = CONNECT_PATTERN.match(stripped)
+            if connect_match:
+                await handle_connect(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    session_id_arg=connect_match.group(1).strip(),
+                    client=client,
+                    session_manager=session_manager,
+                    config=config,
+                )
+                return
 
-        # Check for cwd command
-        cwd_match = CWD_PATTERN.match(stripped)
-        if cwd_match:
-            await handle_cwd(
-                channel=channel,
-                thread_ts=thread_ts,
-                path_arg=cwd_match.group(1).strip(),
-                client=client,
-                session_manager=session_manager,
-                config=config,
+            # Check for sessions command
+            if SESSIONS_PATTERN.match(stripped):
+                await handle_list_sessions(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    client=client,
+                    config=config,
+                )
+                return
+
+            # Check for cwd command
+            cwd_match = CWD_PATTERN.match(stripped)
+            if cwd_match:
+                await handle_cwd(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    path_arg=cwd_match.group(1).strip(),
+                    client=client,
+                    session_manager=session_manager,
+                    config=config,
+                )
+                return
+
+            # Check for help command
+            if HELP_PATTERN.match(stripped):
+                await client.chat_postMessage(
+                    channel=channel, thread_ts=thread_ts, text=HELP_TEXT,
+                )
+                return
+
+        # Handle file uploads
+        user_message = stripped
+        if files:
+            session = await session_manager.get_or_create(
+                channel_id=channel, thread_ts=thread_ts,
             )
-            return
+            effective_cwd = session.cwd or (config.working_directory if config else ".")
+            saved = await download_slack_files(files, effective_cwd, config.slack_bot_token if config else "")
+            if saved:
+                file_list = ", ".join(f"`{f}`" for f in saved)
+                user_message = (
+                    f"{user_message}\n\n"
+                    f"[The user uploaded the following files to the working directory: {file_list}]"
+                ) if user_message else f"The user uploaded files: {file_list}. Please review them."
 
         await process_request(
             channel=channel,
             thread_ts=thread_ts,
-            user_message=stripped,
+            user_message=user_message or "Please review the uploaded files.",
             client=client,
             session_manager=session_manager,
             claude_agent=claude_agent,
+            user_message_ts=event["ts"],
         )
 
 
@@ -481,6 +549,44 @@ def _get_session_summary(session_id: str, working_directory: str) -> str:
         return ""
 
 
+async def download_slack_files(
+    files: list[dict[str, Any]],
+    cwd: str,
+    bot_token: str,
+) -> list[str]:
+    """Download files shared in Slack to the working directory.
+
+    Returns list of saved file paths (relative to cwd).
+    """
+    import httpx
+
+    saved_files = []
+    async with httpx.AsyncClient() as http:
+        for file_info in files:
+            url = file_info.get("url_private_download") or file_info.get("url_private")
+            name = file_info.get("name", "uploaded_file")
+            if not url:
+                continue
+
+            try:
+                resp = await http.get(
+                    url,
+                    headers={"Authorization": f"Bearer {bot_token}"},
+                    follow_redirects=True,
+                )
+                resp.raise_for_status()
+
+                dest = os.path.join(cwd, name)
+                with open(dest, "wb") as f:
+                    f.write(resp.content)
+                saved_files.append(name)
+                logger.info(f"Downloaded file: {name} -> {dest}")
+            except Exception as e:
+                logger.warning(f"Failed to download file {name}: {e}")
+
+    return saved_files
+
+
 async def handle_cwd(
     channel: str,
     thread_ts: str,
@@ -550,6 +656,7 @@ async def process_request(
     client: AsyncWebClient,
     session_manager: SessionManager,
     claude_agent: ClaudeSlackAgent,
+    user_message_ts: str | None = None,
 ) -> None:
     """Process a user request through Claude."""
     # Get or create session for this thread
@@ -566,6 +673,13 @@ async def process_request(
             text=":hourglass: I'm still working on the previous request. Please wait...",
         )
         return
+
+    # Add "eyes" reaction to user's message to show we're processing
+    if user_message_ts:
+        try:
+            await client.reactions_add(channel=channel, name="eyes", timestamp=user_message_ts)
+        except Exception:
+            pass  # Best effort
 
     # Send initial "thinking" message
     result = await client.chat_postMessage(
@@ -595,6 +709,7 @@ async def process_request(
             client=client,
             claude_agent=claude_agent,
             session_manager=session_manager,
+            user_message_ts=user_message_ts,
         )
     )
 
@@ -606,8 +721,10 @@ async def _run_claude_task(
     client: AsyncWebClient,
     claude_agent: ClaudeSlackAgent,
     session_manager: SessionManager,
+    user_message_ts: str | None = None,
 ) -> None:
     """Run Claude agent task with error handling."""
+    success = False
     try:
         await claude_agent.process_message(
             session=session,
@@ -615,6 +732,7 @@ async def _run_claude_task(
             updater=updater,
             slack_client=client,
         )
+        success = True
     except Exception as e:
         logger.exception(f"Error processing message: {e}")
         await updater.show_error(str(e))
@@ -622,3 +740,19 @@ async def _run_claude_task(
         # Ensure session is marked as not processing
         session.is_processing = False
         await session_manager.save(session)
+
+        # Update reaction on user's message
+        if user_message_ts:
+            try:
+                await client.reactions_remove(
+                    channel=session.channel_id, name="eyes", timestamp=user_message_ts,
+                )
+            except Exception:
+                pass
+            try:
+                reaction = "white_check_mark" if success else "x"
+                await client.reactions_add(
+                    channel=session.channel_id, name=reaction, timestamp=user_message_ts,
+                )
+            except Exception:
+                pass
