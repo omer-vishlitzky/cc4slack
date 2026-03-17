@@ -34,6 +34,9 @@ SESSIONS_PATTERN = re.compile(r"^sessions?\s*$", re.IGNORECASE)
 # Regex to match cwd command with optional path
 CWD_PATTERN = re.compile(r"^cwd\s*(.*)$", re.IGNORECASE)
 
+# Regex to match approve command
+APPROVE_PATTERN = re.compile(r"^approve\s+(on|off)\s*$", re.IGNORECASE)
+
 # Regex to match help command
 HELP_PATTERN = re.compile(r"^help\s*$", re.IGNORECASE)
 
@@ -45,6 +48,8 @@ HELP_TEXT = """:robot_face: *Available commands:*
 • *`sessions`* — List available Claude sessions
 • *`cwd`* — Show current working directory
 • *`cwd <path>`* — Change working directory for this thread
+• *`approve on`* — Auto-approve all tool use (default)
+• *`approve off`* — Require Slack approval for dangerous tools (Bash, Write, Edit)
 • *`help`* — Show this help message
 
 _You can also upload files — they'll be saved to the working directory and passed to Claude._
@@ -123,6 +128,18 @@ def register_event_handlers(
                 client=client,
                 session_manager=session_manager,
                 config=config,
+            )
+            return
+
+        # Check for approve command
+        approve_match = APPROVE_PATTERN.match(user_message)
+        if approve_match:
+            await handle_approve_toggle(
+                channel=channel,
+                thread_ts=thread_ts,
+                toggle=approve_match.group(1).lower(),
+                client=client,
+                session_manager=session_manager,
             )
             return
 
@@ -221,6 +238,18 @@ def register_event_handlers(
                     client=client,
                     session_manager=session_manager,
                     config=config,
+                )
+                return
+
+            # Check for approve command
+            approve_match = APPROVE_PATTERN.match(stripped)
+            if approve_match:
+                await handle_approve_toggle(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    toggle=approve_match.group(1).lower(),
+                    client=client,
+                    session_manager=session_manager,
                 )
                 return
 
@@ -647,6 +676,47 @@ async def handle_cwd(
         ),
     )
     logger.info(f"Changed cwd for {channel}:{thread_ts} to {new_path}")
+
+
+async def handle_approve_toggle(
+    channel: str,
+    thread_ts: str,
+    toggle: str,
+    client: AsyncWebClient,
+    session_manager: SessionManager,
+) -> None:
+    """Handle the 'approve on/off' command to toggle auto-approval for this thread."""
+    session = await session_manager.get_or_create(
+        channel_id=channel,
+        thread_ts=thread_ts,
+    )
+
+    auto_approve = toggle == "on"
+    session.auto_approve = auto_approve
+    await session_manager.save(session)
+
+    if auto_approve:
+        await client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=(
+                ":white_check_mark: *Auto-approve enabled*\n"
+                "All tools will run without asking for permission.\n"
+                "_Use `approve off` to require approval for dangerous tools._"
+            ),
+        )
+    else:
+        await client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=(
+                ":shield: *Approval mode enabled*\n"
+                "Claude will ask for permission before running Bash commands or editing files.\n"
+                "Read-only tools (Read, Glob, Grep, etc.) are still auto-approved.\n"
+                "_Use `approve on` to disable approval prompts._"
+            ),
+        )
+    logger.info(f"Set auto_approve={auto_approve} for {channel}:{thread_ts}")
 
 
 async def process_request(

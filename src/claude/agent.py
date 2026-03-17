@@ -127,11 +127,13 @@ class ClaudeSlackAgent:
         )
 
         # Set permission mode or custom callback
-        if self.config.dangerously_skip_permissions:
-            logger.info("Using bypassPermissions mode (DANGEROUSLY_SKIP_PERMISSIONS=true)")
+        # Per-session auto_approve overrides the global config; None = use global default
+        auto_approve = session.auto_approve if session.auto_approve is not None else self.config.dangerously_skip_permissions
+        if auto_approve:
+            logger.info("Using bypassPermissions mode")
             options.permission_mode = "bypassPermissions"
         else:
-            logger.info("Using can_use_tool callback for permission checks")
+            logger.info("Using Slack approval flow for permission checks")
             options.can_use_tool = can_use_tool
 
         # Only set model if explicitly configured
