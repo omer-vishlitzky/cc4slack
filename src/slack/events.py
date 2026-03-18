@@ -298,6 +298,28 @@ def read_session_id_from_file(file_path: str) -> str | None:
     return None
 
 
+def _clean_title(raw: str) -> str:
+    """Clean raw message content into a short readable title."""
+    # Strip XML/HTML-like tags
+    text = re.sub(r"<[^>]+>", "", raw)
+    # Strip URLs
+    text = re.sub(r"https?://\S+", "", text)
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    # Take the first meaningful line
+    for line in text.split("\n"):
+        line = line.strip()
+        if line and len(line) > 5:
+            text = line
+            break
+    # Strip trailing punctuation/whitespace left after URL removal
+    text = text.strip(": \t\n")
+    # Truncate
+    if len(text) > 100:
+        text = text[:97] + "..."
+    return text if len(text) > 3 else "(no title)"
+
+
 def get_session_title(file_path: str) -> str:
     """Extract the first user message from a session transcript as a title."""
     import json
@@ -316,10 +338,7 @@ def get_session_title(file_path: str) -> str:
                 ):
                     content = data["message"].get("content", "")
                     if isinstance(content, str) and content.strip():
-                        title = content.strip()[:80]
-                        if len(content.strip()) > 80:
-                            title += "..."
-                        return title
+                        return _clean_title(content)
     except Exception as e:
         logger.debug(f"Failed to read session title from {file_path}: {e}")
     return "(no title)"
@@ -496,7 +515,7 @@ async def handle_list_sessions(
 
     now = time.time()
     lines = []
-    for i, (sid, _path, title, mtime) in enumerate(available[:10], start=1):
+    for i, (_sid, _path, title, mtime) in enumerate(available[:10], start=1):
         age_s = now - mtime
         if age_s < 3600:
             age = f"{int(age_s / 60)}m ago"
@@ -504,16 +523,16 @@ async def handle_list_sessions(
             age = f"{int(age_s / 3600)}h ago"
         else:
             age = f"{int(age_s / 86400)}d ago"
-        lines.append(f"*{i}.* `{sid[:12]}...` ({age})\n    _{title}_")
+        lines.append(f"*{i}.* {title}  _({age})_")
 
     session_list = "\n".join(lines)
     await client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         text=(
-            f":file_folder: *Available sessions* ({config.working_directory})\n\n"
+            f":file_folder: *Recent sessions*\n\n"
             f"{session_list}\n\n"
-            f"_Use `connect` to resume the most recent, or `connect <number>` to pick one._"
+            f"_`connect` = most recent · `connect 3` = by number_"
         ),
     )
 
