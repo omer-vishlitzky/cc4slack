@@ -28,7 +28,7 @@ class Session:
     num_turns: int = 0
     total_duration_ms: int = 0
     cwd: str | None = None  # Per-thread working directory override
-    auto_approve: bool | None = None  # Per-thread toggle: None = use global default, True/False = override
+    permission_mode: str | None = None  # Per-thread override: None = use global default
 
     @property
     def thread_key(self) -> str:

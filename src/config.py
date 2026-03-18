@@ -43,22 +43,14 @@ class Settings(BaseSettings):
         description="Maximum conversation turns"
     )
 
-    # Tool Approval Settings
-    dangerously_skip_permissions: bool = Field(
-        default=False,
-        description="Skip all permission prompts (like --dangerously-skip-permissions)"
-    )
-    auto_approve_read_only: bool = Field(
-        default=True,
-        description="Auto-approve read-only tools (Read, Glob, Grep, etc.)"
-    )
-    require_approval_for_bash: bool = Field(
-        default=True,
-        description="Require user approval for Bash commands"
-    )
-    require_approval_for_write: bool = Field(
-        default=True,
-        description="Require user approval for file writes/edits"
+    # Permission mode: controls what tools Claude can use without asking
+    # - "default": Use Claude's default permissions from settings files
+    # - "bypass": All tools run without permission checks (use in sandboxed environments)
+    # - "allowEdits": Auto-approve file edits, Bash commands are blocked
+    # - "plan": Read-only mode, no writes or bash allowed
+    permission_mode: Literal["default", "bypass", "allowEdits", "plan"] = Field(
+        default="default",
+        description="Default permission mode for Claude tool use"
     )
 
     # Session Configuration

@@ -12,7 +12,6 @@ from .events import register_event_handlers
 
 if TYPE_CHECKING:
     from ..claude.agent import ClaudeSlackAgent
-    from ..claude.tool_approval import ApprovalManager
     from ..config import Settings
     from ..sessions.manager import SessionManager
 
@@ -23,19 +22,8 @@ def create_slack_app(
     config: Settings,
     session_manager: SessionManager,
     claude_agent: ClaudeSlackAgent,
-    approval_manager: ApprovalManager,
 ) -> AsyncApp:
-    """Create and configure the Slack Bolt app.
-
-    Args:
-        config: Application settings
-        session_manager: Session manager instance
-        claude_agent: Claude agent instance
-        approval_manager: Tool approval manager instance
-
-    Returns:
-        Configured AsyncApp instance
-    """
+    """Create and configure the Slack Bolt app."""
     # Create the Slack Bolt app
     app = AsyncApp(
         token=config.slack_bot_token,
@@ -46,7 +34,7 @@ def create_slack_app(
     register_event_handlers(app, session_manager, claude_agent, config)
 
     # Register action handlers (button clicks)
-    register_action_handlers(app, session_manager, approval_manager, config)
+    register_action_handlers(app, session_manager, config)
 
     logger.info("Slack app configured successfully")
 

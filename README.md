@@ -6,9 +6,13 @@ Interact with Claude Code directly from Slack. This app brings the full power of
 
 - **Full Agent Mode**: Claude can read files, write code, run commands, and help with any coding task
 - **Thread-Based Sessions**: Each Slack thread maintains its own conversation context
-- **Tool Approvals**: Interactive buttons to approve or reject potentially dangerous operations (file writes, bash commands)
+- **Session Continuity**: Connect Slack threads to existing Claude Code terminal sessions, or resume Slack sessions from the terminal
+- **Permission Modes**: Control what tools Claude can use — from read-only to full access
+- **Per-Thread Overrides**: Change working directory or permission mode per thread
+- **File Uploads**: Upload files to Slack and they're saved to the working directory for Claude to use
+- **Cost Tracking**: See API cost, turns, and duration when clearing a session
 - **Streaming Responses**: See Claude's responses as they're generated
-- **Socket Mode**: No public URL required - easy local development and deployment
+- **Socket Mode**: No public URL required — easy local development and deployment
 
 ## Quick Start
 
@@ -31,9 +35,11 @@ Interact with Claude Code directly from Slack. This app brings the full power of
 2. Under "Bot Token Scopes", add:
    - `app_mentions:read` - Read mentions of the bot
    - `chat:write` - Send messages
+   - `files:read` - Read uploaded files
    - `im:history` - Read direct message history
    - `im:read` - Access direct messages
    - `im:write` - Send direct messages
+   - `reactions:write` - Add emoji reactions
 
 #### Subscribe to Events
 1. Go to **Event Subscriptions**
@@ -82,6 +88,9 @@ ANTHROPIC_API_KEY=sk-ant-your-api-key
 
 # Optional - Working directory for Claude
 WORKING_DIRECTORY=/path/to/your/project
+
+# Permission mode (default, bypass, allowEdits, plan)
+PERMISSION_MODE=default
 ```
 
 ### 5. Run the App
@@ -111,67 +120,84 @@ Can you review this code for security issues?
 ```
 
 ### In Threads
-Continue conversations in threads - each thread maintains its own session context.
+Continue conversations in threads — each thread maintains its own session context.
 
-## Interactive Buttons
+### Commands
 
-The app uses Slack Block Kit for rich interactions:
+| Command | Description |
+|---------|-------------|
+| `connect` | Connect to the most recent Claude terminal session |
+| `connect <number>` | Connect by index from the sessions list |
+| `connect <session-id>` | Connect by full session ID |
+| `sessions` | List available Claude sessions |
+| `cwd` | Show current working directory |
+| `cwd <path>` | Change working directory for this thread |
+| `mode` | Show current permission mode |
+| `mode <mode>` | Change permission mode for this thread |
+| `help` | Show available commands |
 
-### Tool Approval Requests
-When Claude wants to perform a potentially dangerous operation, an approval request is posted with tool-specific details:
+### File Uploads
+Upload files in a thread — they'll be saved to the working directory and passed to Claude as context.
 
-- **Bash**: Shows the command description and the full command to be executed
-- **Write**: Shows the target file path and a content preview
-- **Edit**: Shows the file path, the text being replaced, and the replacement text
-- **Other tools**: Shows the raw input as JSON
+### Interactive Buttons
 
-Each request includes **Approve** (green) and **Reject** (red) buttons. Once either is clicked, the message updates to show the decision. Clicking on an already-decided request shows a notice that it was already processed.
+- **Cancel**: Stop the current operation while Claude is processing
+- **Clear Session**: End the session and see a cost/usage summary
+- **Status**: Show session details (cwd, permission mode, cost, turns, session ID)
 
-### In-Progress Controls
-While Claude is processing, a **Cancel** button is available to stop the current operation and cancel any pending approvals for the session.
+## Permission Modes
 
-### Response Controls
-After Claude responds, two buttons are shown:
+Control what tools Claude can use via the `PERMISSION_MODE` env var or the `mode` command per thread:
 
-- **Clear Session**: Resets the conversation context (cancels pending approvals and removes session state)
-- **Status**: Shows session info including processing state, session ID, and creation time
+| Mode | Description |
+|------|-------------|
+| `default` | Use Claude's built-in permissions from `~/.claude/settings.json` and `.claude/settings.local.json`. Allowed tools run, others are blocked. |
+| `bypass` | All tools run without permission checks. **Only use in sandboxed environments.** |
+| `allowEdits` | File edits (Write, Edit) are auto-approved. Bash commands are blocked unless explicitly allowed in settings. |
+| `plan` | Read-only mode. No file writes or bash commands allowed. |
 
-## Configuration Options
+Example — set mode per thread in Slack:
+```
+mode allowEdits
+```
+
+> **Note**: The Claude Code SDK's `can_use_tool` callback does not currently work in headless mode, so interactive per-tool approval buttons are not available. Permission control is handled via the CLI's built-in permission modes instead.
+
+## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SLACK_BOT_TOKEN` | Required | Slack bot token (xoxb-...) |
 | `SLACK_APP_TOKEN` | Required | Slack app token (xapp-...) |
-| `ANTHROPIC_API_KEY` | - | Anthropic API key |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key (optional if using default auth) |
 | `CLAUDE_MODEL` | claude-sonnet-4-20250514 | Claude model to use |
 | `CLAUDE_MAX_TURNS` | 50 | Maximum conversation turns |
-| `AUTO_APPROVE_READ_ONLY` | true | Auto-approve read-only operations |
-| `REQUIRE_APPROVAL_FOR_BASH` | true | Require approval for bash commands |
-| `REQUIRE_APPROVAL_FOR_WRITE` | true | Require approval for file writes |
-| `SESSION_STORAGE` | memory | Storage backend (memory/redis) |
-| `SESSION_TTL_SECONDS` | 86400 | Session lifetime (24 hours) |
+| `PERMISSION_MODE` | default | Permission mode (default, bypass, allowEdits, plan) |
 | `WORKING_DIRECTORY` | . | Working directory for Claude |
+| `SESSION_STORAGE` | memory | Storage backend (memory/redis) |
+| `SESSION_TTL_SECONDS` | 86400 | Session lifetime in seconds (24 hours) |
 | `LOG_LEVEL` | INFO | Logging level |
 
 ## Architecture
 
 ```
 src/
-├── __init__.py             # Package init, version
+├── __init__.py
+├── main.py                 # Entry point, app lifecycle
+├── config.py               # Pydantic settings from env
 ├── slack/
-│   ├── __init__.py
-│   ├── actions.py          # Button click handlers (approve/reject/cancel/status)
-│   └── blocks.py           # Block Kit UI components
+│   ├── app.py              # Slack Bolt app setup
+│   ├── events.py           # Event handlers, command routing
+│   ├── actions.py          # Button click handlers (cancel/clear/status)
+│   ├── blocks.py           # Block Kit UI components
+│   └── message_updater.py  # Streaming message updates
 ├── claude/
-│   ├── __init__.py
-│   └── tool_approval.py    # Approval coordination (async event-based)
+│   ├── agent.py            # Claude Code SDK integration
+│   └── tool_approval.py    # Approval types (unused — SDK limitation)
 └── sessions/
-    ├── __init__.py
-    ├── manager.py          # Session lifecycle
-    └── storage.py          # Storage implementations (memory backend)
+    ├── manager.py           # Session dataclass and lifecycle
+    └── storage.py           # Storage backend (memory)
 ```
-
-> **Note:** Several modules listed in the planned architecture (`main.py`, `config.py`, `slack/app.py`, `slack/events.py`, `slack/message_updater.py`, `claude/agent.py`) are not yet implemented.
 
 ## Development
 

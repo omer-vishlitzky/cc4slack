@@ -205,6 +205,7 @@ def session_status(
     claude_session_id: str | None = None,
     total_cost_usd: float = 0.0,
     num_turns: int = 0,
+    permission_mode: str = "",
 ) -> list[dict[str, Any]]:
     """Show session status information."""
     status_emoji = ":gear:" if is_processing else ":white_check_mark:"
@@ -223,6 +224,8 @@ def session_status(
         fields.append(f"*Turns:* {num_turns}")
     if total_cost_usd > 0:
         fields.append(f"*Total Cost:* ${total_cost_usd:.4f}")
+    if permission_mode:
+        fields.append(f"*Permission Mode:* `{permission_mode}`")
     if message_count is not None:
         fields.append(f"*Messages:* {message_count}")
 

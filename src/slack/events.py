@@ -34,8 +34,8 @@ SESSIONS_PATTERN = re.compile(r"^sessions?\s*$", re.IGNORECASE)
 # Regex to match cwd command with optional path
 CWD_PATTERN = re.compile(r"^cwd\s*(.*)$", re.IGNORECASE)
 
-# Regex to match approve command
-APPROVE_PATTERN = re.compile(r"^approve\s+(on|off)\s*$", re.IGNORECASE)
+# Regex to match mode command
+MODE_PATTERN = re.compile(r"^mode\s*(default|bypass|allowEdits|plan)?\s*$", re.IGNORECASE)
 
 # Regex to match help command
 HELP_PATTERN = re.compile(r"^help\s*$", re.IGNORECASE)
@@ -48,8 +48,11 @@ HELP_TEXT = """:robot_face: *Available commands:*
 • *`sessions`* — List available Claude sessions
 • *`cwd`* — Show current working directory
 • *`cwd <path>`* — Change working directory for this thread
-• *`approve on`* — Auto-approve all tool use (default)
-• *`approve off`* — Require Slack approval for dangerous tools (Bash, Write, Edit)
+• *`mode`* — Show current permission mode
+• *`mode default`* — Use Claude's settings (.claude/settings.json)
+• *`mode bypass`* — All tools run without checks (use in sandbox)
+• *`mode allowEdits`* — Auto-approve edits, block bash
+• *`mode plan`* — Read-only, no writes or bash
 • *`help`* — Show this help message
 
 _You can also upload files — they'll be saved to the working directory and passed to Claude._
@@ -131,15 +134,16 @@ def register_event_handlers(
             )
             return
 
-        # Check for approve command
-        approve_match = APPROVE_PATTERN.match(user_message)
-        if approve_match:
-            await handle_approve_toggle(
+        # Check for mode command
+        mode_match = MODE_PATTERN.match(user_message)
+        if mode_match:
+            await handle_mode_command(
                 channel=channel,
                 thread_ts=thread_ts,
-                toggle=approve_match.group(1).lower(),
+                mode_arg=mode_match.group(1),
                 client=client,
                 session_manager=session_manager,
+                config=config,
             )
             return
 
@@ -241,15 +245,16 @@ def register_event_handlers(
                 )
                 return
 
-            # Check for approve command
-            approve_match = APPROVE_PATTERN.match(stripped)
-            if approve_match:
-                await handle_approve_toggle(
+            # Check for mode command
+            mode_match = MODE_PATTERN.match(stripped)
+            if mode_match:
+                await handle_mode_command(
                     channel=channel,
                     thread_ts=thread_ts,
-                    toggle=approve_match.group(1).lower(),
+                    mode_arg=mode_match.group(1),
                     client=client,
                     session_manager=session_manager,
+                    config=config,
                 )
                 return
 
@@ -697,45 +702,73 @@ async def handle_cwd(
     logger.info(f"Changed cwd for {channel}:{thread_ts} to {new_path}")
 
 
-async def handle_approve_toggle(
+async def handle_mode_command(
     channel: str,
     thread_ts: str,
-    toggle: str,
+    mode_arg: str | None,
     client: AsyncWebClient,
     session_manager: SessionManager,
+    config: Settings | None = None,
 ) -> None:
-    """Handle the 'approve on/off' command to toggle auto-approval for this thread."""
+    """Handle the 'mode' command to show or change permission mode."""
+    from ..config import get_settings
+    config = config or get_settings()
+
     session = await session_manager.get_or_create(
         channel_id=channel,
         thread_ts=thread_ts,
     )
 
-    auto_approve = toggle == "on"
-    session.auto_approve = auto_approve
+    if not mode_arg:
+        # Show current mode
+        effective = session.permission_mode or config.permission_mode
+        override = f" (thread override: `{session.permission_mode}`)" if session.permission_mode else ""
+        mode_descriptions = {
+            "default": "Using Claude's default permissions from settings files",
+            "bypass": "All tools run without permission checks",
+            "allowEdits": "File edits auto-approved, bash commands blocked",
+            "plan": "Read-only mode, no writes or bash",
+        }
+        desc = mode_descriptions.get(effective, "Unknown")
+        await client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=(
+                f":shield: *Permission mode:* `{effective}`\n"
+                f"{desc}{override}\n"
+                f"_Default: `{config.permission_mode}` — change with `mode bypass`, `mode allowEdits`, or `mode plan`_"
+            ),
+        )
+        return
+
+    mode = mode_arg if mode_arg in ("default", "bypass", "allowEdits", "plan") else None
+    if not mode:
+        await client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=":x: Unknown mode. Use `mode default`, `mode bypass`, `mode allowEdits`, or `mode plan`.",
+        )
+        return
+
+    session.permission_mode = mode
     await session_manager.save(session)
 
-    if auto_approve:
-        await client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=(
-                ":white_check_mark: *Auto-approve enabled*\n"
-                "All tools will run without asking for permission.\n"
-                "_Use `approve off` to require approval for dangerous tools._"
-            ),
-        )
-    else:
-        await client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=(
-                ":shield: *Approval mode enabled*\n"
-                "Claude will ask for permission before running Bash commands or editing files.\n"
-                "Read-only tools (Read, Glob, Grep, etc.) are still auto-approved.\n"
-                "_Use `approve on` to disable approval prompts._"
-            ),
-        )
-    logger.info(f"Set auto_approve={auto_approve} for {channel}:{thread_ts}")
+    mode_emoji = {"default": ":shield:", "bypass": ":warning:", "allowEdits": ":pencil:", "plan": ":book:"}
+    mode_descriptions = {
+        "default": "Using Claude's default permissions from settings files (.claude/settings.json).",
+        "bypass": "All tools run without permission checks. Use in sandboxed environments.",
+        "allowEdits": "File edits are auto-approved. Bash commands will be blocked.",
+        "plan": "Read-only mode. No file writes or bash commands allowed.",
+    }
+    await client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=(
+            f"{mode_emoji[mode]} *Permission mode set to `{mode}`*\n"
+            f"{mode_descriptions[mode]}"
+        ),
+    )
+    logger.info(f"Set permission_mode={mode} for {channel}:{thread_ts}")
 
 
 async def process_request(
@@ -819,7 +852,6 @@ async def _run_claude_task(
             session=session,
             user_message=user_message,
             updater=updater,
-            slack_client=client,
         )
         success = True
     except Exception as e:

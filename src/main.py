@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
 from .claude.agent import ClaudeSlackAgent
-from .claude.tool_approval import ApprovalManager
 from .config import Settings, get_settings
 from .sessions.manager import SessionManager
 from .sessions.storage import MemorySessionStorage
@@ -66,10 +65,9 @@ def setup_logging(level: str = "INFO", log_file: str = "cc4slack.log") -> None:
 
 async def cleanup_loop(
     session_manager: SessionManager,
-    approval_manager: ApprovalManager,
     interval: int = 60,
 ) -> NoReturn:
-    """Periodic cleanup of expired sessions and approvals."""
+    """Periodic cleanup of expired sessions."""
     logger = logging.getLogger(__name__)
 
     while True:
@@ -80,11 +78,6 @@ async def cleanup_loop(
             sessions_cleaned = await session_manager.cleanup_expired()
             if sessions_cleaned:
                 logger.debug(f"Cleaned up {sessions_cleaned} expired sessions")
-
-            # Cleanup expired approvals
-            approvals_cleaned = await approval_manager.cleanup_expired()
-            if approvals_cleaned:
-                logger.debug(f"Cleaned up {approvals_cleaned} expired approvals")
 
         except asyncio.CancelledError:
             break
@@ -120,13 +113,11 @@ async def run_app() -> None:
 
     # Initialize managers
     session_manager = SessionManager(storage, config.session_ttl_seconds)
-    approval_manager = ApprovalManager()
 
     # Initialize Claude agent
     claude_agent = ClaudeSlackAgent(
         config=config,
         session_manager=session_manager,
-        approval_manager=approval_manager,
     )
 
     # Create Slack app
@@ -134,12 +125,11 @@ async def run_app() -> None:
         config=config,
         session_manager=session_manager,
         claude_agent=claude_agent,
-        approval_manager=approval_manager,
     )
 
     # Start cleanup task
     cleanup_task = asyncio.create_task(
-        cleanup_loop(session_manager, approval_manager)
+        cleanup_loop(session_manager)
     )
 
     # Create Socket Mode handler
