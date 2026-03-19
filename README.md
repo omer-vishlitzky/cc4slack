@@ -16,6 +16,16 @@ Interact with Claude Code directly from Slack. This app brings the full power of
 
 ## Quick Start
 
+### One-Line Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/eranco74/cc4slack/master/install.sh | bash
+```
+
+This clones the repo, creates a virtual environment, installs dependencies, and prompts for your Slack tokens. Requires Python 3.11+ and the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code).
+
+### Manual Setup
+
 ### 1. Create a Slack App
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click "Create New App"
