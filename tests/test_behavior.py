@@ -6,6 +6,7 @@ import pytest
 from router.slack_handler import (
     _build_prompt_with_thread_context,
     clean_mention,
+    extract_full_text,
     handle_slack_event,
 )
 
@@ -61,8 +62,6 @@ def make_deps() -> tuple[AsyncMock, AsyncMock, dict[str, object]]:
     updaters: dict[str, object] = {}
     return ws_manager, slack_client, updaters
 
-
-# === Event routing tests ===
 
 
 @pytest.mark.asyncio
@@ -187,8 +186,6 @@ async def test_slack_retry_is_ignored(mock_verifier: AsyncMock) -> None:
     mock_verifier.assert_not_called()
 
 
-# === Mention cleaning ===
-
 
 def test_clean_mention_removes_bot_id() -> None:
     assert clean_mention(text="<@U123ABC> hello world") == "hello world"
@@ -206,7 +203,47 @@ def test_clean_mention_only_mention() -> None:
     assert clean_mention(text="<@U123ABC>") == ""
 
 
-# === Thread context fetching ===
+
+def test_extract_full_text_plain_message() -> None:
+    event = {"text": "hello world"}
+    assert extract_full_text(event=event) == "hello world"
+
+
+def test_extract_full_text_no_text() -> None:
+    event = {"text": ""}
+    assert extract_full_text(event=event) == ""
+
+
+def test_extract_full_text_with_attachment() -> None:
+    event = {
+        "text": "pls help",
+        "attachments": [{"text": "forwarded content here", "title": "Help Desk"}],
+    }
+    result = extract_full_text(event=event)
+    assert "pls help" in result
+    assert "forwarded content here" in result
+    assert "Help Desk" in result
+    assert "[Forwarded message]" in result
+
+
+def test_extract_full_text_attachment_only_fallback() -> None:
+    event = {
+        "text": "check this",
+        "attachments": [{"fallback": "fallback text only"}],
+    }
+    result = extract_full_text(event=event)
+    assert "check this" in result
+    assert "fallback text only" in result
+
+
+def test_extract_full_text_no_text_with_attachment() -> None:
+    event = {
+        "text": "",
+        "attachments": [{"text": "just the attachment"}],
+    }
+    result = extract_full_text(event=event)
+    assert result == "just the attachment"
+
 
 
 @pytest.mark.asyncio
@@ -251,6 +288,8 @@ async def test_thread_context_first_mention_fetches_full_thread() -> None:
     assert "[Your message]" in result
     assert "what do you think?" in result
     slack_client.conversations_replies.assert_called_once()
+    call_kwargs = slack_client.conversations_replies.call_args.kwargs
+    assert call_kwargs["inclusive"] is True
 
 
 @pytest.mark.asyncio
@@ -280,6 +319,7 @@ async def test_thread_context_second_mention_fetches_delta() -> None:
     call_kwargs = slack_client.conversations_replies.call_args.kwargs
     assert call_kwargs["oldest"] == "1002.0"
     assert call_kwargs["latest"] == "1004.0"
+    assert call_kwargs["inclusive"] is False
 
 
 @pytest.mark.asyncio

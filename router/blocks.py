@@ -1,8 +1,6 @@
 import json
 from typing import Any
 
-SLACK_TEXT_LIMIT = 3000
-
 
 def thinking_indicator() -> list[dict[str, Any]]:
     return [
@@ -14,7 +12,7 @@ def thinking_indicator() -> list[dict[str, Any]]:
 
 
 def response_message(*, text: str, session_id: str) -> list[dict[str, Any]]:
-    display_text = text[:SLACK_TEXT_LIMIT] if text else "_No response_"
+    display_text = text if text else "_No response_"
     return [
         {"type": "section", "text": {"type": "mrkdwn", "text": display_text}},
         {"type": "divider"},
@@ -39,7 +37,7 @@ def response_message(*, text: str, session_id: str) -> list[dict[str, Any]]:
 
 
 def response_with_cancel(*, text: str, session_id: str) -> list[dict[str, Any]]:
-    display_text = text[:SLACK_TEXT_LIMIT] if text else ":hourglass_flowing_sand: _Processing..._"
+    display_text = text if text else ":hourglass_flowing_sand: _Processing..._"
     return [
         {"type": "section", "text": {"type": "mrkdwn", "text": display_text}},
         {
@@ -127,7 +125,7 @@ def operation_cancelled() -> list[dict[str, Any]]:
 
 
 def error_message(*, error: str) -> list[dict[str, Any]]:
-    return [{"type": "section", "text": {"type": "mrkdwn", "text": f":x: *Error*\n{error[:2000]}"}}]
+    return [{"type": "section", "text": {"type": "mrkdwn", "text": f":x: *Error*\n{error}"}}]
 
 
 def agent_connected(*, slack_user_id: str) -> list[dict[str, Any]]:
@@ -145,21 +143,6 @@ def agent_connected(*, slack_user_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def agent_disconnected() -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": (
-                    ":warning: *Your agent disconnected.*"
-                    " Start it again on your beaker machine and re-verify."
-                ),
-            },
-        }
-    ]
-
-
 def agent_not_connected() -> list[dict[str, Any]]:
     return [
         {
@@ -168,10 +151,8 @@ def agent_not_connected() -> list[dict[str, Any]]:
                 "type": "mrkdwn",
                 "text": (
                     ":x: *No agent connected.*\n\n"
-                    "Start your agent on your beaker machine:\n"
-                    "```./scripts/start-agent.sh```\n"
-                    "Then verify with the code shown in your terminal:\n"
-                    "```@assisted-bot verify <code>```"
+                    "Install and connect your agent:\n"
+                    "```curl -fsSL https://raw.githubusercontent.com/eranco74/cc4slack/main/scripts/install-agent.sh | bash```"  # noqa: E501
                 ),
             },
         }

@@ -7,7 +7,7 @@ name = "cc4slack"
 version = "1.0.0"
 description = "Claude Code for Slack — router + agent system"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 license = "MIT"
 
 [tool.ruff]

@@ -6,6 +6,7 @@ class RouterSettings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     slack_bot_token: str

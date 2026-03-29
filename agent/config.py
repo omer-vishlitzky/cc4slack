@@ -9,7 +9,6 @@ class AgentSettings(BaseSettings):
     )
 
     router_url: str
-    anthropic_api_key: str = ""
     claude_model: str = ""
     claude_max_turns: int = 50
     working_directory: str = "."

@@ -55,7 +55,7 @@ def test_parse_heartbeat() -> None:
 
 
 def test_parse_reconnect_message() -> None:
-    raw = json.dumps({"type": "reconnect", "auth_token": "durable-tok"})
+    raw = json.dumps({"type": "reconnect", "auth_token": "durable-tok", "user_id": "U123"})
     msg = parse_agent_message(raw=raw)
     assert msg["type"] == "reconnect"
     assert msg["auth_token"] == "durable-tok"
@@ -78,7 +78,7 @@ def test_parse_verified_message() -> None:
 
 
 def test_reconnect_roundtrip() -> None:
-    msg = {"type": "reconnect", "auth_token": "durable-tok"}
+    msg = {"type": "reconnect", "auth_token": "durable-tok", "user_id": "U123"}
     raw = serialize(message=msg)
     parsed = parse_agent_message(raw=raw)
     assert parsed == msg

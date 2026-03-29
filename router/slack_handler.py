@@ -22,6 +22,7 @@ from .commands import (
     try_parse_command,
 )
 from .message_updater import SlackMessageUpdater
+from .thread_store import ThreadState
 
 if TYPE_CHECKING:
     from slack_sdk.web.async_client import AsyncWebClient
@@ -35,6 +36,35 @@ MENTION_PATTERN = re.compile(r"<@[A-Z0-9]+>\s*")
 
 def clean_mention(*, text: str) -> str:
     return MENTION_PATTERN.sub("", text).strip()
+
+
+def extract_full_text(*, event: dict[str, Any]) -> str:
+    text = event.get("text", "").strip()
+    attachments = event.get("attachments", [])
+    if not attachments:
+        return text
+
+    attachment_parts: list[str] = []
+    for att in attachments:
+        parts: list[str] = []
+        if att.get("pretext"):
+            parts.append(att["pretext"])
+        if att.get("title"):
+            parts.append(f"*{att['title']}*")
+        if att.get("text"):
+            parts.append(att["text"])
+        if att.get("fallback") and not att.get("text"):
+            parts.append(att["fallback"])
+        if parts:
+            attachment_parts.append("\n".join(parts))
+
+    if not attachment_parts:
+        return text
+
+    attachments_block = "\n---\n".join(attachment_parts)
+    if text:
+        return f"{text}\n\n[Forwarded message]\n{attachments_block}"
+    return attachments_block
 
 
 async def handle_slack_event(
@@ -65,6 +95,18 @@ async def handle_slack_event(
 
     event = data["event"]
     event_type = event["type"]
+    channel_type = event.get("channel_type", "")
+    logger.info(
+        f"Slack event: type={event_type} channel_type={channel_type} "
+        f"user={event.get('user', '?')} channel={event.get('channel', '?')} "
+        f"text={event.get('text', '')!r} "
+        f"attachments={'attachments' in event} files={'files' in event}"
+    )
+    if "attachments" in event:
+        for att in event["attachments"]:
+            fallback = att.get("fallback", "")
+            att_text = att.get("text", "")
+            logger.info(f"  attachment: fallback={fallback!r} text={att_text!r}")
 
     if event_type == "app_mention":
         asyncio.create_task(
@@ -75,7 +117,7 @@ async def handle_slack_event(
                 updaters=updaters,
             )
         )
-    elif event_type == "message" and event.get("channel_type") == "im":
+    elif event_type == "message" and channel_type == "im":
         if not event.get("bot_id") and not event.get("subtype"):
             asyncio.create_task(
                 _handle_dm(
@@ -85,6 +127,10 @@ async def handle_slack_event(
                     updaters=updaters,
                 )
             )
+        else:
+            logger.info(f"Ignored DM: bot_id={event.get('bot_id')} subtype={event.get('subtype')}")
+    else:
+        logger.info(f"Unhandled event type: {event_type} channel_type={channel_type}")
 
     return Response(status_code=200)
 
@@ -107,7 +153,6 @@ async def handle_slack_action(
     form = await request.form()
     payload = json.loads(form["payload"])
     action_id = payload["actions"][0]["action_id"]
-    json.loads(payload["actions"][0]["value"])
     channel = payload["channel"]["id"]
     thread_ts = payload["message"].get("thread_ts", payload["message"]["ts"])
     user_id = payload["user"]["id"]
@@ -163,7 +208,8 @@ async def _handle_mention(
 ) -> None:
     user_id = event["user"]
     channel = event["channel"]
-    text = clean_mention(text=event.get("text", ""))
+    full_text = extract_full_text(event=event)
+    text = clean_mention(text=full_text)
     thread_ts = event.get("thread_ts", event["ts"])
 
     if not text:
@@ -195,7 +241,7 @@ async def _handle_dm(
 ) -> None:
     user_id = event["user"]
     channel = event["channel"]
-    text = event.get("text", "").strip()
+    text = extract_full_text(event=event)
     thread_ts = event.get("thread_ts", event["ts"])
 
     if not text:
@@ -224,20 +270,35 @@ async def _dispatch(
     slack_client: "AsyncWebClient",
     updaters: dict[str, SlackMessageUpdater],
 ) -> None:
+    text = clean_mention(text=text)
     command = try_parse_command(text=text)
+    logger.info(f"Dispatch: user={user_id} text={text!r} command={command[0] if command else None}")
+    if command and command[0] == "verify":
+        _, match = command
+        await handle_verify(
+            token=match.group(1),
+            slack_user_id=user_id,
+            channel=channel,
+            thread_ts=thread_ts,
+            client=slack_client,
+            ws_manager=ws_manager,
+        )
+        return
+
+    conn = ws_manager.get_connection(slack_user_id=user_id)
+    if not conn:
+        await slack_client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text="No agent connected",
+            blocks=blocks.agent_not_connected(),
+        )
+        return
+
     if command:
         cmd_name, match = command
         if cmd_name == "help":
             await handle_help(channel=channel, thread_ts=thread_ts, client=slack_client)
-        elif cmd_name == "verify":
-            await handle_verify(
-                token=match.group(1),
-                slack_user_id=user_id,
-                channel=channel,
-                thread_ts=thread_ts,
-                client=slack_client,
-                ws_manager=ws_manager,
-            )
         elif cmd_name == "unregister":
             await handle_unregister(
                 slack_user_id=user_id,
@@ -283,16 +344,6 @@ async def _dispatch(
             )
         return
 
-    conn = ws_manager.get_connection(slack_user_id=user_id)
-    if not conn:
-        await slack_client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text="No agent connected",
-            blocks=blocks.agent_not_connected(),
-        )
-        return
-
     await _forward_to_agent(
         user_id=user_id,
         channel=channel,
@@ -330,8 +381,6 @@ async def _forward_to_agent(
         blocks=blocks.thinking_indicator(),
     )
     message_ts = result["ts"]
-
-    from .thread_store import ThreadState
 
     state = ws_manager.get_thread_state(slack_user_id=user_id, thread_key=thread_key)
     if not state:
@@ -384,13 +433,14 @@ async def _build_prompt_with_thread_context(
     if not is_thread_reply:
         return text
 
-    oldest = last_processed_ts if last_processed_ts else thread_ts
+    is_first_fetch = not last_processed_ts
+    oldest = thread_ts if is_first_fetch else last_processed_ts
     result = await slack_client.conversations_replies(
         channel=channel,
         ts=thread_ts,
         oldest=oldest,
         latest=current_ts,
-        inclusive=False,
+        inclusive=is_first_fetch,
     )
     messages = result["messages"]
 
@@ -404,9 +454,7 @@ async def _build_prompt_with_thread_context(
 
     context_lines = []
     for msg in context_messages:
-        user = msg.get("user", "unknown")
-        msg_text = msg.get("text", "")
-        context_lines.append(f"<@{user}>: {msg_text}")
+        context_lines.append(f"<@{msg['user']}>: {msg['text']}")
 
     context_block = "\n".join(context_lines)
     prefix = "New messages" if last_processed_ts else "Thread context"

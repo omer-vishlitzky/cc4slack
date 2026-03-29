@@ -2,7 +2,7 @@ import asyncio
 import logging
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import WebSocket
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class PendingRegistration:
     ws: WebSocket
     token: str
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -49,7 +49,7 @@ class WebSocketManager:
         if not pending:
             return False
 
-        age = (datetime.now(timezone.utc) - pending.created_at).total_seconds()
+        age = (datetime.now(UTC) - pending.created_at).total_seconds()
         if age > self._token_expiry_seconds:
             logger.warning(f"Token expired: {token[:8]}... (age={age:.0f}s)")
             return False
@@ -63,7 +63,7 @@ class WebSocketManager:
                 pass
 
         auth_token = secrets.token_urlsafe(32)
-        await self._thread_store.save_auth_token(auth_token=auth_token, slack_user_id=slack_user_id)
+        await self._thread_store.save_auth_token(slack_user_id=slack_user_id, auth_token=auth_token)
 
         persisted_threads = await self._thread_store.load_all_thread_states(
             slack_user_id=slack_user_id
@@ -86,10 +86,11 @@ class WebSocketManager:
         logger.info(f"Verified: {slack_user_id} → agent (auth_token={auth_token[:8]}...)")
         return True
 
-    async def reconnect_agent(self, *, ws: WebSocket, auth_token: str) -> bool:
-        slack_user_id = await self._thread_store.lookup_auth_token(auth_token=auth_token)
-        if not slack_user_id:
+    async def reconnect_agent(self, *, ws: WebSocket, auth_token: str, user_id: str) -> bool:
+        stored_token = await self._thread_store.get_auth_token(slack_user_id=user_id)
+        if stored_token != auth_token:
             return False
+        slack_user_id = user_id
 
         if slack_user_id in self._active:
             old = self._active[slack_user_id]
@@ -132,8 +133,7 @@ class WebSocketManager:
     async def remove_connection(self, *, slack_user_id: str) -> None:
         conn = self._active.pop(slack_user_id, None)
         if conn:
-            if conn.auth_token:
-                await self._thread_store.revoke_auth_token(auth_token=conn.auth_token)
+            await self._thread_store.revoke_auth_token(slack_user_id=slack_user_id)
             logger.info(f"Removed connection for {slack_user_id}")
             try:
                 await conn.ws.close()
@@ -167,7 +167,7 @@ class WebSocketManager:
             )
 
     async def cleanup_expired_tokens(self) -> int:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expired = [
             token
             for token, reg in self._pending.items()

@@ -17,24 +17,32 @@ def make_thread_state(*, channel: str = "C1", thread_ts: str = "T1") -> ThreadSt
 
 
 @pytest.mark.asyncio
-async def test_save_and_lookup_auth_token(*, store: RedisThreadStore) -> None:
-    await store.save_auth_token(auth_token="tok-abc", slack_user_id="U111")
-    result = await store.lookup_auth_token(auth_token="tok-abc")
-    assert result == "U111"
+async def test_save_and_get_auth_token(*, store: RedisThreadStore) -> None:
+    await store.save_auth_token(slack_user_id="U111", auth_token="tok-abc")
+    result = await store.get_auth_token(slack_user_id="U111")
+    assert result == "tok-abc"
 
 
 @pytest.mark.asyncio
-async def test_lookup_nonexistent_auth_token(*, store: RedisThreadStore) -> None:
-    result = await store.lookup_auth_token(auth_token="nonexistent")
+async def test_get_nonexistent_auth_token(*, store: RedisThreadStore) -> None:
+    result = await store.get_auth_token(slack_user_id="U999")
     assert result is None
 
 
 @pytest.mark.asyncio
 async def test_revoke_auth_token(*, store: RedisThreadStore) -> None:
-    await store.save_auth_token(auth_token="tok-abc", slack_user_id="U111")
-    await store.revoke_auth_token(auth_token="tok-abc")
-    result = await store.lookup_auth_token(auth_token="tok-abc")
+    await store.save_auth_token(slack_user_id="U111", auth_token="tok-abc")
+    await store.revoke_auth_token(slack_user_id="U111")
+    result = await store.get_auth_token(slack_user_id="U111")
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_save_auth_token_overwrites_previous(*, store: RedisThreadStore) -> None:
+    await store.save_auth_token(slack_user_id="U111", auth_token="old-token")
+    await store.save_auth_token(slack_user_id="U111", auth_token="new-token")
+    result = await store.get_auth_token(slack_user_id="U111")
+    assert result == "new-token"
 
 
 @pytest.mark.asyncio

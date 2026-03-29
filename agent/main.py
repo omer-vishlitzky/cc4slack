@@ -1,18 +1,19 @@
 import asyncio
 import logging
 import secrets
+import sys
 
 from dotenv import load_dotenv
 
 from .claude_runner import ClaudeRunner
 from .config import AgentSettings
-from .session_file import load_session, save_session
+from .session_file import clear_session, load_session, save_session
 from .ws_client import AgentWebSocket
 
 logger = logging.getLogger(__name__)
 
 
-async def run_agent() -> None:
+async def run_agent(*, verify_only: bool = False) -> None:
     load_dotenv()
     settings = AgentSettings()
 
@@ -33,7 +34,7 @@ async def run_agent() -> None:
         try:
             await ws.connect()
 
-            last_owner, last_auth_token = await _authenticate(
+            last_owner, last_auth_token, ws = await _authenticate(
                 ws=ws,
                 settings=settings,
                 runner=runner,
@@ -41,8 +42,20 @@ async def run_agent() -> None:
             )
 
             logger.info(f"Authenticated as {last_owner}")
-            print(f"Connected as {last_owner}. Listening for messages...")
+            print(f"Connected as {last_owner}.")
 
+            if verify_only:
+                _save_state(
+                    auth_token=last_auth_token,
+                    owner=last_owner,
+                    settings=settings,
+                    runner=runner,
+                    thread_configs=thread_configs,
+                )
+                print("Verification complete. Session saved.")
+                return
+
+            print("Listening for messages...")
             ws.start_heartbeat(interval_seconds=30)
             await _event_loop(
                 ws=ws,
@@ -79,21 +92,31 @@ async def _authenticate(
     settings: AgentSettings,
     runner: ClaudeRunner,
     thread_configs: dict[str, dict[str, str]],
-) -> tuple[str, str]:
+) -> tuple[str, str, AgentWebSocket]:
     saved = load_session()
     if saved and saved["auth_token"] and saved["router_url"] == settings.router_url:
-        auth_token = str(saved["auth_token"])
-        await ws.send(message={"type": "reconnect", "auth_token": auth_token})
+        try:
+            auth_token = str(saved["auth_token"])
+            user_id = str(saved["owner_user_id"])
+            await ws.send(
+                message={"type": "reconnect", "auth_token": auth_token, "user_id": user_id}
+            )
 
-        verified_msg = await asyncio.wait_for(ws.receive(), timeout=5.0)
-        if verified_msg["type"] == "verified":
-            owner = verified_msg["slack_user_id"]
-            for tk, sid in saved["claude_sessions"].items():
-                runner.set_session(thread_key=str(tk), session_id=str(sid))
-            for tk, cfg in saved["thread_configs"].items():
-                thread_configs[str(tk)] = {str(k): str(v) for k, v in cfg.items()}
-            print("Reconnected using saved session.")
-            return owner, auth_token
+            verified_msg = await asyncio.wait_for(ws.receive(), timeout=5.0)
+            if verified_msg["type"] == "verified":
+                owner = verified_msg["slack_user_id"]
+                for tk, sid in saved["claude_sessions"].items():
+                    runner.set_session(thread_key=str(tk), session_id=str(sid))
+                for tk, cfg in saved["thread_configs"].items():
+                    thread_configs[str(tk)] = {str(k): str(v) for k, v in cfg.items()}
+                print("Reconnected using saved session.")
+                return owner, auth_token, ws
+        except Exception:
+            logger.info("Reconnect rejected, clearing stale session")
+            clear_session()
+            await ws.close()
+            ws = AgentWebSocket(url=settings.router_url)
+            await ws.connect()
 
     token = secrets.token_urlsafe(24)
     await ws.send(message={"type": "register", "token": token})
@@ -104,9 +127,6 @@ async def _authenticate(
     print(f"{'=' * 50}\n")
 
     verified_msg = await ws.receive()
-    assert verified_msg["type"] == "verified"
-    assert verified_msg["token"] == token
-
     owner = verified_msg["slack_user_id"]
     auth_token = verified_msg["auth_token"]
 
@@ -118,7 +138,7 @@ async def _authenticate(
         thread_configs={},
     )
 
-    return owner, auth_token
+    return owner, auth_token, ws
 
 
 async def _event_loop(
@@ -208,8 +228,6 @@ def _save_state(
 
 
 def main() -> None:
-    import sys
-
     load_dotenv()
     try:
         AgentSettings()
@@ -221,14 +239,15 @@ def main() -> None:
             "\nOptional:\n"
             "  WORKING_DIRECTORY=/path/to/project\n"
             "  PERMISSION_MODE=default|bypass|allowEdits|plan\n"
-            "  CLAUDE_MODEL=claude-sonnet-4-6 (default: uses CLI default)\n"
-            "  ANTHROPIC_API_KEY=sk-ant-...\n",
+            "  CLAUDE_MODEL=claude-sonnet-4-6 (default: uses CLI default)\n",
             file=sys.stderr,
         )
         sys.exit(1)
 
+    verify_only = "--verify-only" in sys.argv
+
     try:
-        asyncio.run(run_agent())
+        asyncio.run(run_agent(verify_only=verify_only))
     except KeyboardInterrupt:
         print("\nAgent stopped.")
 

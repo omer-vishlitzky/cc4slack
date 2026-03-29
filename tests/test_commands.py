@@ -2,7 +2,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from router.commands import handle_help, handle_unregister, handle_verify, try_parse_command
+from router.commands import (
+    handle_cwd,
+    handle_help,
+    handle_mode,
+    handle_model,
+    handle_unregister,
+    handle_verify,
+    try_parse_command,
+)
+from router.slack_handler import _dispatch
 from router.thread_store import RedisThreadStore
 from router.ws_manager import WebSocketManager
 
@@ -168,3 +177,210 @@ async def test_handle_unregister_not_connected() -> None:
 
     client.chat_postMessage.assert_called_once()
     assert "no agent" in client.chat_postMessage.call_args.kwargs["text"].lower()
+
+
+# --- Auth gateway tests ---
+
+
+@pytest.mark.asyncio
+async def test_auth_gateway_blocks_help_without_agent() -> None:
+    ws_manager = make_ws_manager()
+    slack_client = AsyncMock()
+    slack_client.chat_postMessage = AsyncMock(return_value={"ts": "M1"})
+    updaters: dict[str, object] = {}
+
+    await _dispatch(
+        user_id="U_NO_AGENT",
+        channel="C1",
+        thread_ts="T1",
+        text="help",
+        user_message_ts="T1",
+        ws_manager=ws_manager,
+        slack_client=slack_client,
+        updaters=updaters,
+    )
+
+    call_kwargs = slack_client.chat_postMessage.call_args.kwargs
+    assert "no agent connected" in call_kwargs["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_auth_gateway_blocks_mode_without_agent() -> None:
+    ws_manager = make_ws_manager()
+    slack_client = AsyncMock()
+    slack_client.chat_postMessage = AsyncMock(return_value={"ts": "M1"})
+
+    await _dispatch(
+        user_id="U_NO_AGENT",
+        channel="C1",
+        thread_ts="T1",
+        text="mode bypass",
+        user_message_ts="T1",
+        ws_manager=ws_manager,
+        slack_client=slack_client,
+        updaters={},
+    )
+
+    call_kwargs = slack_client.chat_postMessage.call_args.kwargs
+    assert "no agent connected" in call_kwargs["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_auth_gateway_blocks_regular_message_without_agent() -> None:
+    ws_manager = make_ws_manager()
+    slack_client = AsyncMock()
+    slack_client.chat_postMessage = AsyncMock(return_value={"ts": "M1"})
+
+    await _dispatch(
+        user_id="U_NO_AGENT",
+        channel="C1",
+        thread_ts="T1",
+        text="hello Claude",
+        user_message_ts="T1",
+        ws_manager=ws_manager,
+        slack_client=slack_client,
+        updaters={},
+    )
+
+    call_kwargs = slack_client.chat_postMessage.call_args.kwargs
+    assert "no agent connected" in call_kwargs["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_auth_gateway_allows_verify_without_agent() -> None:
+    ws_manager = make_ws_manager()
+    ws = AsyncMock()
+    ws.send_text = AsyncMock()
+    await ws_manager.register_pending(ws=ws, token="tok999")
+
+    slack_client = AsyncMock()
+    slack_client.chat_postMessage = AsyncMock(return_value={"ts": "M1"})
+
+    await _dispatch(
+        user_id="U_NEW",
+        channel="C1",
+        thread_ts="T1",
+        text="verify tok999",
+        user_message_ts="T1",
+        ws_manager=ws_manager,
+        slack_client=slack_client,
+        updaters={},
+    )
+
+    call_kwargs = slack_client.chat_postMessage.call_args.kwargs
+    assert "connected" in call_kwargs["text"].lower()
+
+
+# --- Persistence tests ---
+
+
+@pytest.mark.asyncio
+async def test_mode_change_persists_to_store() -> None:
+    ws_manager = make_ws_manager()
+    ws = AsyncMock()
+    ws.send_text = AsyncMock()
+    await ws_manager.register_pending(ws=ws, token="tok")
+    await ws_manager.verify_token(token="tok", slack_user_id="U111")
+
+    client = AsyncMock()
+    await handle_mode(
+        mode_arg="bypass",
+        channel="C1",
+        thread_ts="T1",
+        slack_user_id="U111",
+        client=client,
+        ws_manager=ws_manager,
+    )
+
+    import asyncio
+
+    await asyncio.sleep(0)
+
+    loaded = await ws_manager._thread_store.load_thread_state(
+        slack_user_id="U111", thread_key="C1:T1"
+    )
+    assert loaded is not None
+    assert loaded.permission_mode == "bypass"
+
+
+@pytest.mark.asyncio
+async def test_cwd_change_persists_to_store() -> None:
+    ws_manager = make_ws_manager()
+    ws = AsyncMock()
+    ws.send_text = AsyncMock()
+    await ws_manager.register_pending(ws=ws, token="tok")
+    await ws_manager.verify_token(token="tok", slack_user_id="U111")
+
+    client = AsyncMock()
+    await handle_cwd(
+        path_arg="/home/user/project",
+        channel="C1",
+        thread_ts="T1",
+        slack_user_id="U111",
+        client=client,
+        ws_manager=ws_manager,
+    )
+
+    import asyncio
+
+    await asyncio.sleep(0)
+
+    loaded = await ws_manager._thread_store.load_thread_state(
+        slack_user_id="U111", thread_key="C1:T1"
+    )
+    assert loaded is not None
+    assert loaded.cwd == "/home/user/project"
+
+
+@pytest.mark.asyncio
+async def test_model_change_persists_to_store() -> None:
+    ws_manager = make_ws_manager()
+    ws = AsyncMock()
+    ws.send_text = AsyncMock()
+    await ws_manager.register_pending(ws=ws, token="tok")
+    await ws_manager.verify_token(token="tok", slack_user_id="U111")
+
+    client = AsyncMock()
+    await handle_model(
+        model_arg="claude-opus-4-6",
+        channel="C1",
+        thread_ts="T1",
+        slack_user_id="U111",
+        client=client,
+        ws_manager=ws_manager,
+    )
+
+    import asyncio
+
+    await asyncio.sleep(0)
+
+    loaded = await ws_manager._thread_store.load_thread_state(
+        slack_user_id="U111", thread_key="C1:T1"
+    )
+    assert loaded is not None
+    assert loaded.model == "claude-opus-4-6"
+
+
+@pytest.mark.asyncio
+async def test_mode_creates_state_if_missing() -> None:
+    ws_manager = make_ws_manager()
+    ws = AsyncMock()
+    ws.send_text = AsyncMock()
+    await ws_manager.register_pending(ws=ws, token="tok")
+    await ws_manager.verify_token(token="tok", slack_user_id="U111")
+
+    assert ws_manager.get_thread_state(slack_user_id="U111", thread_key="C1:T1") is None
+
+    client = AsyncMock()
+    await handle_mode(
+        mode_arg="plan",
+        channel="C1",
+        thread_ts="T1",
+        slack_user_id="U111",
+        client=client,
+        ws_manager=ws_manager,
+    )
+
+    state = ws_manager.get_thread_state(slack_user_id="U111", thread_key="C1:T1")
+    assert state is not None
+    assert state.permission_mode == "plan"

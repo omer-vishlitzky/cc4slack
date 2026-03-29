@@ -30,7 +30,10 @@ updaters: dict[str, SlackMessageUpdater] = {}
 async def cleanup_loop() -> None:
     while True:
         await asyncio.sleep(60)
-        await ws_manager.cleanup_expired_tokens()
+        try:
+            await ws_manager.cleanup_expired_tokens()
+        except Exception:
+            logger.exception("cleanup_expired_tokens failed, will retry next cycle")
 
 
 @asynccontextmanager
@@ -92,7 +95,9 @@ async def ws_agent(ws: WebSocket) -> None:
                 await ws_manager.register_pending(ws=ws, token=msg["token"])
 
             elif msg_type == "reconnect":
-                success = await ws_manager.reconnect_agent(ws=ws, auth_token=msg["auth_token"])
+                success = await ws_manager.reconnect_agent(
+                    ws=ws, auth_token=msg["auth_token"], user_id=msg["user_id"]
+                )
                 if not success:
                     await ws.close(code=4001, reason="Invalid auth token")
                     return
@@ -145,7 +150,22 @@ async def ws_agent(ws: WebSocket) -> None:
     except Exception:
         logger.exception("Agent WebSocket error")
     finally:
+        await _cleanup_updaters_for_agent(ws=ws)
         await ws_manager.handle_agent_disconnect(ws=ws)
+
+
+async def _cleanup_updaters_for_agent(*, ws: WebSocket) -> None:
+    user_id = ws_manager.find_user_by_ws(ws=ws)
+    if not user_id:
+        return
+    conn = ws_manager.get_connection(slack_user_id=user_id)
+    if not conn:
+        return
+    for thread_key in list(conn.threads.keys()):
+        updater = updaters.pop(thread_key, None)
+        if updater:
+            await updater.show_error(error="Agent disconnected")
+            logger.info(f"Cleaned up stuck updater for {thread_key}")
 
 
 async def _remove_eyes_reaction(*, thread_key: str, success: bool) -> None:

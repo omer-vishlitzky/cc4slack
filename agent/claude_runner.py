@@ -1,12 +1,17 @@
 import asyncio
 import logging
+from collections import defaultdict
 from typing import Any
 
+import claude_code_sdk._internal.client as _sdk_client
 from claude_code_sdk import query
+from claude_code_sdk._errors import MessageParseError
+from claude_code_sdk._internal.message_parser import parse_message as _original_parse
 from claude_code_sdk.types import (
     AssistantMessage,
     ClaudeCodeOptions,
     ResultMessage,
+    SystemMessage,
     TextBlock,
     ToolUseBlock,
 )
@@ -15,6 +20,21 @@ from .config import AgentSettings
 from .ws_client import AgentWebSocket
 
 logger = logging.getLogger(__name__)
+
+
+# SDK 0.0.25 crashes on unrecognized message types (e.g. rate_limit_event)
+# instead of skipping them. Patch to return a harmless SystemMessage so the
+# async-for iteration survives transient informational messages from the CLI.
+def _parse_message_safe(data: dict[str, Any]) -> AssistantMessage | ResultMessage | SystemMessage:
+    try:
+        return _original_parse(data)
+    except MessageParseError:
+        msg_type = data.get("type", "unknown")
+        logger.info(f"Skipping unrecognized SDK message type: {msg_type}")
+        return SystemMessage(subtype=msg_type, data=data)
+
+
+_sdk_client.parse_message = _parse_message_safe
 
 
 class ClaudeRunner:
@@ -215,13 +235,12 @@ def _format_tool_use(*, tool_name: str, tool_input: dict[str, Any]) -> str:
         command = tool_input.get("command", "")
         desc = tool_input.get("description", "")
         if desc:
-            return f":terminal: *Running:* {desc}\n```{command[:200]}```"
-        return f":terminal: *Running:*\n```{command[:200]}```"
+            return f":terminal: *Running:* {desc}\n```{command}```"
+        return f":terminal: *Running:*\n```{command}```"
 
     if tool_name == "WebFetch":
         url = tool_input.get("url", "")
-        display = f"{url[:50]}..." if len(url) > 50 else url
-        return f":link: *Fetching* `{display}`"
+        return f":link: *Fetching* `{url}`"
 
     if tool_name == "Agent":
         desc = tool_input.get("description", "subtask")
@@ -229,6 +248,7 @@ def _format_tool_use(*, tool_name: str, tool_input: dict[str, Any]) -> str:
 
     template = TOOL_FORMATTERS.get(tool_name)
     if template:
-        return template.format_map(tool_input)
+        safe_input = defaultdict(lambda: "?", tool_input)
+        return template.format_map(safe_input)
 
     return f":wrench: *Using tool:* `{tool_name}`"

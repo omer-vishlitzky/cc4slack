@@ -2,11 +2,28 @@ import re
 from typing import TYPE_CHECKING
 
 from . import blocks
+from .thread_store import ThreadState
 
 if TYPE_CHECKING:
     from slack_sdk.web.async_client import AsyncWebClient
 
     from .ws_manager import WebSocketManager
+
+
+def _get_or_create_thread_state(
+    *,
+    ws_manager: "WebSocketManager",
+    slack_user_id: str,
+    thread_key: str,
+    channel: str,
+    thread_ts: str,
+) -> ThreadState:
+    state = ws_manager.get_thread_state(slack_user_id=slack_user_id, thread_key=thread_key)
+    if state:
+        return state
+    state = ThreadState(channel=channel, thread_ts=thread_ts, message_ts="")
+    ws_manager.set_thread_state(slack_user_id=slack_user_id, thread_key=thread_key, state=state)
+    return state
 
 COMMAND_PATTERNS: dict[str, re.Pattern[str]] = {
     "help": re.compile(r"^help\s*$", re.IGNORECASE),
@@ -144,18 +161,24 @@ async def handle_mode(
         return
 
     thread_key = f"{channel}:{thread_ts}"
-    state = ws_manager.get_thread_state(slack_user_id=slack_user_id, thread_key=thread_key)
-    if state:
-        state.permission_mode = mode_arg
+    state = _get_or_create_thread_state(
+        ws_manager=ws_manager,
+        slack_user_id=slack_user_id,
+        thread_key=thread_key,
+        channel=channel,
+        thread_ts=thread_ts,
+    )
+    state.permission_mode = mode_arg
+    ws_manager.set_thread_state(slack_user_id=slack_user_id, thread_key=thread_key, state=state)
 
     await ws_manager.send_to_agent(
         slack_user_id=slack_user_id,
         message={
             "type": "config_update",
             "thread_key": thread_key,
-            "cwd": state.cwd if state else ".",
+            "cwd": state.cwd,
             "permission_mode": mode_arg,
-            "model": state.model if state else "",
+            "model": state.model,
         },
     )
 
@@ -196,9 +219,15 @@ async def handle_cwd(
         )
         return
 
-    state = ws_manager.get_thread_state(slack_user_id=slack_user_id, thread_key=thread_key)
-    if state:
-        state.cwd = path_arg
+    state = _get_or_create_thread_state(
+        ws_manager=ws_manager,
+        slack_user_id=slack_user_id,
+        thread_key=thread_key,
+        channel=channel,
+        thread_ts=thread_ts,
+    )
+    state.cwd = path_arg
+    ws_manager.set_thread_state(slack_user_id=slack_user_id, thread_key=thread_key, state=state)
 
     await ws_manager.send_to_agent(
         slack_user_id=slack_user_id,
@@ -206,8 +235,8 @@ async def handle_cwd(
             "type": "config_update",
             "thread_key": thread_key,
             "cwd": path_arg,
-            "permission_mode": state.permission_mode if state else "default",
-            "model": state.model if state else "",
+            "permission_mode": state.permission_mode,
+            "model": state.model,
         },
     )
 
@@ -240,17 +269,23 @@ async def handle_model(
         return
 
     model = model_arg.strip()
-    state = ws_manager.get_thread_state(slack_user_id=slack_user_id, thread_key=thread_key)
-    if state:
-        state.model = model
+    state = _get_or_create_thread_state(
+        ws_manager=ws_manager,
+        slack_user_id=slack_user_id,
+        thread_key=thread_key,
+        channel=channel,
+        thread_ts=thread_ts,
+    )
+    state.model = model
+    ws_manager.set_thread_state(slack_user_id=slack_user_id, thread_key=thread_key, state=state)
 
     await ws_manager.send_to_agent(
         slack_user_id=slack_user_id,
         message={
             "type": "config_update",
             "thread_key": thread_key,
-            "cwd": state.cwd if state else ".",
-            "permission_mode": state.permission_mode if state else "default",
+            "cwd": state.cwd,
+            "permission_mode": state.permission_mode,
             "model": model,
         },
     )

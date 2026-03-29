@@ -1,4 +1,6 @@
-from agent.claude_runner import _build_options, _format_tool_use
+from claude_code_sdk.types import AssistantMessage, SystemMessage
+
+from agent.claude_runner import _build_options, _format_tool_use, _parse_message_safe
 
 
 def test_build_options_default_mode() -> None:
@@ -95,16 +97,10 @@ def test_format_tool_use_write() -> None:
     assert "/tmp/out.py" in result
 
 
-def test_format_tool_use_web_fetch_long_url() -> None:
+def test_format_tool_use_web_fetch_full_url() -> None:
     long_url = "https://example.com/" + "a" * 100
     result = _format_tool_use(tool_name="WebFetch", tool_input={"url": long_url})
-    assert "..." in result
-
-
-def test_format_tool_use_web_fetch_short_url() -> None:
-    result = _format_tool_use(tool_name="WebFetch", tool_input={"url": "https://example.com"})
-    assert "https://example.com" in result
-    assert "..." not in result
+    assert long_url in result
 
 
 def test_format_tool_use_agent() -> None:
@@ -117,3 +113,41 @@ def test_format_tool_use_unknown() -> None:
     result = _format_tool_use(tool_name="CustomTool", tool_input={})
     assert "CustomTool" in result
     assert ":wrench:" in result
+
+
+def test_format_tool_use_missing_key_does_not_crash() -> None:
+    result = _format_tool_use(tool_name="Read", tool_input={})
+    assert "?" in result
+    assert ":mag:" in result
+
+
+def test_format_tool_use_partial_keys() -> None:
+    result = _format_tool_use(tool_name="Glob", tool_input={"other_field": "value"})
+    assert "?" in result
+
+
+def test_parse_message_safe_handles_rate_limit_event() -> None:
+    data = {"type": "rate_limit_event", "retry_after_ms": 5000}
+    result = _parse_message_safe(data)
+    assert isinstance(result, SystemMessage)
+    assert result.subtype == "rate_limit_event"
+    assert result.data == data
+
+
+def test_parse_message_safe_handles_unknown_type() -> None:
+    data = {"type": "some_future_type", "payload": "whatever"}
+    result = _parse_message_safe(data)
+    assert isinstance(result, SystemMessage)
+    assert result.subtype == "some_future_type"
+
+
+def test_parse_message_safe_passes_known_types() -> None:
+    data = {
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "text", "text": "hello"}],
+            "model": "claude-sonnet-4-6",
+        },
+    }
+    result = _parse_message_safe(data)
+    assert isinstance(result, AssistantMessage)

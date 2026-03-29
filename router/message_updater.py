@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-UPDATE_INTERVAL = 0.5
+UPDATE_INTERVAL = 30
 MAX_MESSAGE_LENGTH = 2900
 
 

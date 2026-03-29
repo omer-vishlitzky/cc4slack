@@ -7,22 +7,14 @@ Use Claude Code from Slack. Each developer runs their own Claude agent on a beak
 ### 1. Clone and start
 
 ```bash
-git clone https://github.com/eranco74/cc4slack.git
-cd cc4slack
-
-# Set your router URL
-export ROUTER_URL=wss://assisted-bot.apps.ext.spoke.prod.us-east-1.aws.paas.redhat.com/ws/agent
-
-# Optional: set working directory for Claude
-export WORKING_DIRECTORY=/path/to/your/project
-
-# Start the agent
-./scripts/start-agent.sh
+curl -fsSL https://raw.githubusercontent.com/eranco74/cc4slack/main/scripts/install-agent.sh | bash
 ```
+
+This clones the repo, installs dependencies, prompts for config, and runs the agent for initial verification. After verification, it installs a systemd service that runs in the background and auto-restarts.
 
 ### 2. Verify in Slack
 
-The agent prints a verification code. Type it in Slack:
+The installer runs the agent and prints a verification code. Type it in Slack:
 
 ```
 @assisted-bot verify K7x9mP2q...

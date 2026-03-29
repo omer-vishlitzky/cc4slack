@@ -29,19 +29,19 @@ class RedisThreadStore:
     def __init__(self, *, redis_url: str) -> None:
         self._redis = redis_lib.from_url(redis_url)
 
-    async def save_auth_token(self, *, auth_token: str, slack_user_id: str) -> None:
+    async def save_auth_token(self, *, slack_user_id: str, auth_token: str) -> None:
         await self._redis.set(
-            f"cc4slack:auth:{auth_token}", slack_user_id, ex=AUTH_TTL_SECONDS
+            f"cc4slack:auth:{slack_user_id}", auth_token, ex=AUTH_TTL_SECONDS
         )
 
-    async def lookup_auth_token(self, *, auth_token: str) -> str | None:
-        val = await self._redis.get(f"cc4slack:auth:{auth_token}")
+    async def get_auth_token(self, *, slack_user_id: str) -> str | None:
+        val = await self._redis.get(f"cc4slack:auth:{slack_user_id}")
         if val is None:
             return None
         return val.decode() if isinstance(val, bytes) else val
 
-    async def revoke_auth_token(self, *, auth_token: str) -> None:
-        await self._redis.delete(f"cc4slack:auth:{auth_token}")
+    async def revoke_auth_token(self, *, slack_user_id: str) -> None:
+        await self._redis.delete(f"cc4slack:auth:{slack_user_id}")
 
     async def save_thread_state(
         self, *, slack_user_id: str, thread_key: str, state: ThreadState
