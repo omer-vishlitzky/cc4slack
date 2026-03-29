@@ -1,230 +1,139 @@
-# cc4slack - Claude Code for Slack
+# cc4slack — Claude Code for Slack
 
-Interact with Claude Code directly from Slack. This app brings the full power of Claude Code's agentic coding assistant capabilities to your Slack workspace.
+Use Claude Code from Slack. Each developer runs their own Claude agent on a beaker machine, connected to Slack through a shared router.
 
-## Features
+## For Developers: Connect Your Agent
 
-- **Full Agent Mode**: Claude can read files, write code, run commands, and help with any coding task
-- **Thread-Based Sessions**: Each Slack thread maintains its own conversation context
-- **Session Continuity**: Connect Slack threads to existing Claude Code terminal sessions, or resume Slack sessions from the terminal
-- **Permission Modes**: Control what tools Claude can use — from read-only to full access
-- **Per-Thread Overrides**: Change working directory or permission mode per thread
-- **File Uploads**: Upload files to Slack and they're saved to the working directory for Claude to use
-- **Cost Tracking**: See API cost, turns, and duration when clearing a session
-- **Streaming Responses**: See Claude's responses as they're generated
-- **Socket Mode**: No public URL required — easy local development and deployment
-
-## Quick Start
-
-### One-Line Install
+### 1. Clone and start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/eranco74/cc4slack/master/install.sh | bash
-```
-
-This clones the repo, creates a virtual environment, installs dependencies, and prompts for your Slack tokens. Requires Python 3.11+ and the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code).
-
-### Manual Setup
-
-### 1. Create a Slack App
-
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click "Create New App"
-2. Choose "From scratch" and give it a name (e.g., "Claude Code")
-3. Select your workspace
-
-### 2. Configure the Slack App
-
-#### Enable Socket Mode
-1. Go to **Settings > Socket Mode**
-2. Enable Socket Mode
-3. Create an App-Level Token with `connections:write` scope
-4. Save the token (starts with `xapp-`)
-
-#### Add Bot Scopes
-1. Go to **OAuth & Permissions**
-2. Under "Bot Token Scopes", add:
-   - `app_mentions:read` - Read mentions of the bot
-   - `chat:write` - Send messages
-   - `files:read` - Read uploaded files
-   - `im:history` - Read direct message history
-   - `im:read` - Access direct messages
-   - `im:write` - Send direct messages
-   - `reactions:write` - Add emoji reactions
-
-#### Subscribe to Events
-1. Go to **Event Subscriptions**
-2. Enable Events
-3. Under "Subscribe to bot events", add:
-   - `app_mention` - When someone mentions the bot
-   - `message.im` - Direct messages to the bot
-
-#### Enable Interactivity
-1. Go to **Interactivity & Shortcuts**
-2. Turn on Interactivity (no URL needed for Socket Mode)
-
-#### Install to Workspace
-1. Go to **OAuth & Permissions**
-2. Click "Install to Workspace"
-3. Copy the "Bot User OAuth Token" (starts with `xoxb-`)
-
-### 3. Set Up the App
-
-```bash
-# Clone or navigate to the project
+git clone https://github.com/eranco74/cc4slack.git
 cd cc4slack
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+# Set your router URL
+export ROUTER_URL=wss://assisted-bot.apps.ext.spoke.prod.us-east-1.aws.paas.redhat.com/ws/agent
 
-# Install dependencies
-pip install -e .
+# Optional: set working directory for Claude
+export WORKING_DIRECTORY=/path/to/your/project
 
-# For development dependencies (testing, linting)
-pip install -e ".[dev]"
+# Start the agent
+./scripts/start-agent.sh
 ```
 
-### 4. Configure Environment Variables
+### 2. Verify in Slack
 
-Create a `.env` file with your tokens:
+The agent prints a verification code. Type it in Slack:
 
-```env
-# Required - Slack tokens
-SLACK_BOT_TOKEN=xoxb-your-bot-token
-SLACK_APP_TOKEN=xapp-your-app-token
-
-# Optional - Anthropic API key (if not using default auth)
-ANTHROPIC_API_KEY=sk-ant-your-api-key
-
-# Optional - Working directory for Claude
-WORKING_DIRECTORY=/path/to/your/project
-
-# Permission mode (default, bypass, allowEdits, plan)
-PERMISSION_MODE=default
+```
+@assisted-bot verify K7x9mP2q...
 ```
 
-### 5. Run the App
+### 3. Use it
 
-```bash
-python -m src.main
+Mention the bot in any channel or DM:
+
+```
+@assisted-bot help me debug this failing test
 ```
 
-Or if installed:
+Each thread is a separate conversation. Claude can read files, write code, run commands — everything you can do in the terminal.
 
-```bash
-cc4slack
-```
-
-## Usage
-
-### In Channels
-Mention the bot with your request:
-```
-@Claude Code Help me write a function to parse JSON
-```
-
-### In Direct Messages
-Just send a message directly to the bot:
-```
-Can you review this code for security issues?
-```
-
-### In Threads
-Continue conversations in threads — each thread maintains its own session context.
-
-### Commands
+## Commands
 
 | Command | Description |
 |---------|-------------|
-| `connect` | Connect to the most recent Claude terminal session |
-| `connect <number>` | Connect by index from the sessions list |
-| `connect <session-id>` | Connect by full session ID |
-| `sessions` | List available Claude sessions |
-| `cwd` | Show current working directory |
-| `cwd <path>` | Change working directory for this thread |
+| `verify <code>` | Connect your beaker agent |
+| `unregister` | Disconnect your agent |
+| `status` | Show connection and session info |
 | `mode` | Show current permission mode |
-| `mode <mode>` | Change permission mode for this thread |
+| `mode <mode>` | Change permission mode |
+| `cwd` | Show working directory |
+| `cwd <path>` | Change working directory |
 | `help` | Show available commands |
-
-### File Uploads
-Upload files in a thread — they'll be saved to the working directory and passed to Claude as context.
-
-### Interactive Buttons
-
-- **Cancel**: Stop the current operation while Claude is processing
-- **Clear Session**: End the session and see a cost/usage summary
-- **Status**: Show session details (cwd, permission mode, cost, turns, session ID)
 
 ## Permission Modes
 
-Control what tools Claude can use via the `PERMISSION_MODE` env var or the `mode` command per thread:
-
 | Mode | Description |
 |------|-------------|
-| `default` | Use Claude's built-in permissions from `~/.claude/settings.json` and `.claude/settings.local.json`. Allowed tools run, others are blocked. |
-| `bypass` | All tools run without permission checks. **Only use in sandboxed environments.** |
-| `allowEdits` | File edits (Write, Edit) are auto-approved. Bash commands are blocked unless explicitly allowed in settings. |
-| `plan` | Read-only mode. No file writes or bash commands allowed. |
+| `default` | Use Claude's settings from `.claude/settings.json` |
+| `bypass` | All tools run without checks (use in sandboxed environments only) |
+| `allowEdits` | File edits auto-approved, bash commands blocked |
+| `plan` | Read-only — no file writes or bash commands |
 
-Example — set mode per thread in Slack:
-```
-mode allowEdits
-```
+Change per thread: `@assisted-bot mode allowEdits`
 
-> **Note**: The Claude Code SDK's `can_use_tool` callback does not currently work in headless mode, so interactive per-tool approval buttons are not available. Permission control is handled via the CLI's built-in permission modes instead.
-
-## Configuration
+## Agent Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SLACK_BOT_TOKEN` | Required | Slack bot token (xoxb-...) |
-| `SLACK_APP_TOKEN` | Required | Slack app token (xapp-...) |
+| `ROUTER_URL` | (required) | WebSocket URL of the router |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key (optional if using default auth) |
-| `CLAUDE_MODEL` | claude-sonnet-4-20250514 | Claude model to use |
-| `CLAUDE_MAX_TURNS` | 50 | Maximum conversation turns |
-| `PERMISSION_MODE` | default | Permission mode (default, bypass, allowEdits, plan) |
-| `WORKING_DIRECTORY` | . | Working directory for Claude |
-| `SESSION_STORAGE` | memory | Storage backend (memory/redis) |
-| `SESSION_TTL_SECONDS` | 86400 | Session lifetime in seconds (24 hours) |
+| `CLAUDE_MODEL` | claude-sonnet-4-20250514 | Model to use |
+| `CLAUDE_MAX_TURNS` | 50 | Max conversation turns per request |
+| `WORKING_DIRECTORY` | . | Default working directory for Claude |
+| `PERMISSION_MODE` | default | Default permission mode |
+| `RECONNECT_DELAY_SECONDS` | 5 | Seconds to wait before reconnecting |
 | `LOG_LEVEL` | INFO | Logging level |
+
+## For Admins: Deploy the Router
+
+### Router Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SLACK_BOT_TOKEN` | (required) | Bot token (xoxb-...) |
+| `SLACK_SIGNING_SECRET` | (required) | Slack signing secret |
+| `TOKEN_EXPIRY_SECONDS` | 300 | Verification token TTL |
+| `REDIS_URL` | (required) | Redis URL for state persistence |
+| `LOG_LEVEL` | INFO | Logging level |
+
+### Persistence
+
+The router requires Redis for state persistence:
+- Auth tokens (7-day TTL) — agents reconnect without re-verification after restarts
+- Thread state (24h TTL) — cost, turns, config survive router restarts
+- Agent saves session locally to `~/.config/cc4slack/session.json`
+
+### Deploy to OpenShift
+
+```bash
+export SLACK_BOT_TOKEN=xoxb-YOUR_TOKEN
+export SLACK_SIGNING_SECRET=YOUR_SECRET
+./scripts/deploy-router.sh
+```
+
+The script builds the image, pushes to Quay, deploys Redis with a PVC, creates secrets (including Redis URL), and deploys the router. Run it again to redeploy after code changes.
+
+### Slack App Setup
+
+The router requires a Slack app with these bot scopes:
+
+| Scope | Purpose |
+|-------|---------|
+| `app_mentions:read` | Receive @mentions |
+| `chat:write` | Send responses |
+| `im:history` | Read DM history |
+| `im:read` | Access DMs |
+| `im:write` | Send DMs |
+| `files:read` | Read uploaded files |
+| `channels:read` | Read channel info |
+
+Event subscriptions:
+- `app_mention` — mentions in channels
+- `message.im` — direct messages
+
+Request URL: `https://<route-hostname>/slack/events`
 
 ## Architecture
 
-```
-src/
-├── __init__.py
-├── main.py                 # Entry point, app lifecycle
-├── config.py               # Pydantic settings from env
-├── slack/
-│   ├── app.py              # Slack Bolt app setup
-│   ├── events.py           # Event handlers, command routing
-│   ├── actions.py          # Button click handlers (cancel/clear/status)
-│   ├── blocks.py           # Block Kit UI components
-│   └── message_updater.py  # Streaming message updates
-├── claude/
-│   ├── agent.py            # Claude Code SDK integration
-│   └── tool_approval.py    # Approval types (unused — SDK limitation)
-└── sessions/
-    ├── manager.py           # Session dataclass and lifecycle
-    └── storage.py           # Storage backend (memory)
-```
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture, security model, and protocol documentation.
 
-## Development
+## Troubleshooting
 
-```bash
-# Install dev dependencies
-pip install -e ".[dev]"
+**"No agent connected"** — Start your agent on your beaker machine and verify with the code.
 
-# Run tests
-pytest
+**"Verification failed"** — Token expired (5 min TTL). Restart the agent to get a new code.
 
-# Type checking
-mypy src
+**Agent keeps disconnecting** — Check network connectivity between beaker and the router. The agent auto-reconnects, but you'll need to re-verify.
 
-# Linting
-ruff check src
-```
-
-## License
-
-MIT
+**"Still processing previous request"** — Claude is working on a previous message in the same thread. Wait for it to finish or use a different thread.
